@@ -51,26 +51,40 @@ import os
 def load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length):
     # Load the dataset from the specified directory
     dataset = load_from_disk(dataset_dir)
-
-    # Combine all text from train, validation, and test sets
-    train_text = " ".join(dataset['train']['text'])
-    valid_text = " ".join(dataset['validation']['text'])
-    test_text = " ".join(dataset['test']['text'])
-
+    
     # Initialize the tokenizer with Byte Pair Encoding (BPE)
     tokenizer = Tokenizer(models.BPE())
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
 
-    # Train the tokenizer
+    # Trainer setup
     trainer = trainers.BpeTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"])
-    tokenizer.train_from_iterator([train_text], trainer)  # You can train only on the train set
 
-    # Tokenize the entire text
-    tokenized_train = tokenizer.encode(train_text).ids
-    tokenized_valid = tokenizer.encode(valid_text).ids
-    tokenized_test = tokenizer.encode(test_text).ids
+    # Merge all text data from train, validation, and test sets
+    merged_text = dataset['train']['text'] + dataset['validation']['text'] + dataset['test']['text']
 
-    return tokenized_train, tokenized_valid, tokenized_test, tokenizer
+    # merged_text = merged_text[0:500000]
+    # Train the tokenizer incrementally to reduce memory usage
+    def batch_iterator(dataset, batch_size=300000):
+        for i in range(0, len(dataset), batch_size):
+            yield dataset[i:i + batch_size]
+
+    print("Training the tokenizer...")
+    for batch in batch_iterator(merged_text):  # Train on batches of merged text
+        tokenizer.train_from_iterator(batch, trainer)
+    
+    # Tokenize the entire merged dataset incrementally
+    def tokenize_batch(texts):
+        tokenized_data = []
+        for batch in batch_iterator(texts):
+            for text in batch:
+                tokenized_data.extend(tokenizer.encode(text).ids)
+        return tokenized_data
+
+    print("Tokenizing merged data...")
+    tokenized_data = tokenize_batch(merged_text)
+
+    return tokenized_data, tokenizer
+
 
 
 class WikitextShiftedDataset(Dataset):
@@ -84,10 +98,9 @@ class WikitextShiftedDataset(Dataset):
     
     def __getitem__(self, idx):
         # Context window is from idx to idx + context_length
-        x = self.data[idx : idx + self.context_length]
+        x = self.data[idx : idx + self.context_length + 1]
         # Target is the token immediately after the context window
-        y = self.data[idx + self.context_length]
-        return torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)
+        return torch.tensor(x, dtype=torch.long)
 
 
 def create_dataloader(tokenized_data, context_length, batch_size):
@@ -237,12 +250,16 @@ if __name__ == "__main__":
     vocab_sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8196, 16392]
     context_lenghts = [32, 64, 128, 256, 512, 1024]
 
+    ###### REMOVE LATER VALA
+    if args.exp_case > 8:
+        sys.exit()
+
     total_num_cases = len(vocab_sizes) * len(context_lenghts)
     args.vocab_size = vocab_sizes[args.exp_case % len(vocab_sizes)]
     args.context_length = context_lenghts[args.exp_case // len(vocab_sizes)]
 
-    already_completed_cases = [0, 1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 25, 8, 17, 26]
-
+    # already_completed_cases = [0, 1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 25, 8, 17, 26]
+    already_completed_cases = []
 
     print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
     # input()
@@ -261,56 +278,56 @@ if __name__ == "__main__":
         sys.exit()
     
     exp_was_initiated = False
-    if os.path.isfile(save_logs_folder + save_logs_filename):
-        with open(save_logs_folder + save_logs_filename, 'rb') as pickle_file:
-            data_log = pickle.load(pickle_file)
-        entropies_for_vocab = list(data_log["entropy"].values())[-1]
-        exp_was_initiated = True
+    # if os.path.isfile(save_logs_folder + save_logs_filename):
+    #     with open(save_logs_folder + save_logs_filename, 'rb') as pickle_file:
+    #         data_log = pickle.load(pickle_file)
+    #     entropies_for_vocab = list(data_log["entropy"].values())[-1]
+    #     exp_was_initiated = True
     
-    if exp_was_initiated and len(data_log["entropy"].values()) == 99:
-        print(f"The example for {save_logs_filename} is already completed. Breaking out.")
-        sys.exit()
+    # if exp_was_initiated and len(data_log["entropy"].values()) == 99:
+    #     print(f"The example for {save_logs_filename} is already completed. Breaking out.")
+    #     sys.exit()
 
     try:
         
-        if exp_was_initiated: 
-            print("Experiment was prev initiated but incomplete ... ")
-            up_to_ctx_count_processed = list(data_log["entropy"].keys())[-1]
-            context_tree = trie_module_memap_sorted.Trie_memap_sorted(memap_filename, metadata_filename)
-            context_tree.load_metadata(metadata_filename)
+        # if exp_was_initiated: 
+        #     print("Experiment was prev initiated but incomplete ... ")
+        #     up_to_ctx_count_processed = list(data_log["entropy"].keys())[-1]
+        #     context_tree = trie_module_memap_sorted.Trie_memap_sorted(memap_filename, metadata_filename)
+        #     context_tree.load_metadata(metadata_filename)
 
-            if context_tree.validate_load():
-                print("Trie loaded and validated successfully")
-            else:
-                print("Trie validation failed")
-                input()
+        #     if context_tree.validate_load():
+        #         print("Trie loaded and validated successfully")
+        #     else:
+        #         print("Trie validation failed")
+        #         input()
 
-            entropy_tree = context_tree.calculate_and_get_entropy()
-            print("Entropy of tree is : " + str(entropy_tree))
-            # context_tree = trie_module_memap.Trie_memap(f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}.bin", 40, args.context_length)
-            # input("WE GOT TO HERE")
-        else:
-            print("Experiment is new ... ")
-            up_to_ctx_count_processed = 0
-            context_tree = trie_module_memap_sorted.Trie_memap_sorted(memap_filename, metadata_filename, 100, args.context_length)
+        #     entropy_tree = context_tree.calculate_and_get_entropy()
+        #     print("Entropy of tree is : " + str(entropy_tree))
+        #     # context_tree = trie_module_memap.Trie_memap(f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}.bin", 40, args.context_length)
+        #     # input("WE GOT TO HERE")
+        # else:
+        print("Experiment is new ... ")
+        up_to_ctx_count_processed = 0
+        context_tree = trie_module_memap_sorted.Trie_memap_sorted(memap_filename, metadata_filename, 200, args.context_length)
 
-            data_log = {
-                "entropy": {},
-                "entropy_per_ctx_len": {},
-                "num_total_ctx": {},
-                "num_unique_ctx": {},
-                "num_unique_ctx_len_list": {},
-                "num_total_ctx_len_list": {},
-                "insert_calc_time": {},
-                "entropy_calc_time": {}
-            }
+        data_log = {
+            "entropy": {},
+            "entropy_per_ctx_len": {},
+            "num_total_ctx": {},
+            "num_unique_ctx": {},
+            "num_unique_ctx_len_list": {},
+            "num_total_ctx_len_list": {},
+            "insert_calc_time": {},
+            "entropy_calc_time": {}
+        }
 
 
         # Example usage
         dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiTextBig'  # Your saved dataset folder
         vocab_size = args.vocab_size
         context_length = args.context_length
-        batch_size = 2000
+        batch_size = 5000
 
         # Step 4: Load and Tokenize the Wikitext-2 Dataset
         tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length)

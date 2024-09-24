@@ -57,12 +57,13 @@ if __name__ == "__main__":
     """
 
     vocab_sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8196, 16392]
-    context_lenghts = [32, 64, 128, 256, 512, 1024]
+    # context_lenghts = [32, 64, 128, 256, 512, 1024]
+    context_lenghts = [32]
 
 
     vocab_source = "custom"
     AR_training = True
-    save_logs_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_Wiki/logs_trees_cpp/"
+    save_logs_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict/logs_trees_cpp/"
 
 
     try:
@@ -99,11 +100,13 @@ if __name__ == "__main__":
                 
                 print("_" * 100)
                 print("vocab_size = " + str(vocab_size) + " ctx_len = " + str(ctx_len) + " :")
+                print(data_log["entropy"])
                 print(len(data_log["entropy"].values()))
                 label = f"V = {vocab_size}, T = {ctx_len}"
-                if len(data_log["entropy"].values()) == 99:
-                    entropies_per_ctx_seen[label] = data_log["entropy"]
-                    print("vocab_size = " + str(vocab_size) + " ctx_len = " + str(ctx_len) + " is fully done ")
+                entropies_per_ctx_seen[label] = data_log["entropy"]
+                # if len(data_log["entropy"].values()) == 99:
+                #     entropies_per_ctx_seen[label] = data_log["entropy"]
+                #     print("vocab_size = " + str(vocab_size) + " ctx_len = " + str(ctx_len) + " is fully done ")
 
         
         # print(entropies_for_vocab)
@@ -120,17 +123,17 @@ if __name__ == "__main__":
         plt.grid(True)
         plt.yscale("log")
         plt.legend()
-        plt.savefig("/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_Wiki/logs_trees_cpp/graphs_trees_cpp_postprocess/entropy_vs_voc_ctxLen.jpg")
+        plt.savefig("/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict/graphs_trees_cpp_postprocess/entropy_vs_voc_ctxLen.jpg")
 
                 
         
         # print(len(entropies_per_ctx_seen.keys()))
-        ctx_len_64 = {label: entropies_per_ctx_seen[label] for label in list(entropies_per_ctx_seen.keys()) if "T = 64" in label}
+        ctx_len_32 = {label: entropies_per_ctx_seen[label] for label in list(entropies_per_ctx_seen.keys()) if "T = 32" in label}
         colors = ["#FF7043", "#FF5252", "#FF4081", "#E91E63", "#D81B60", "#C2185B", "#AD1457", "#880E4F", "#6A1B9A"]
-        colors_dict = {list(ctx_len_64.keys())[i]: colors[i] for i in range(0, len(list(ctx_len_64.keys())))}
+        colors_dict = {list(ctx_len_32.keys())[i]: colors[i] for i in range(0, len(list(ctx_len_32.keys())))}
         plt.figure(figsize=(8, 5))
-        for scenario in ctx_len_64.keys():
-            plt.plot(list(ctx_len_64[scenario].keys()), list(ctx_len_64[scenario].values()), color =colors_dict[scenario], label = scenario)
+        for scenario in ctx_len_32.keys():
+            plt.plot(list(ctx_len_32[scenario].keys()), list(ctx_len_32[scenario].values()), color =colors_dict[scenario], label = scenario)
         plt.xlabel('Contexts seen')
         plt.ylabel('Final Entropy')
         plt.title('Entropy vs contexts seen for v = 64')
@@ -138,7 +141,7 @@ if __name__ == "__main__":
         plt.yscale("log")
         plt.xscale("log")
         plt.legend()
-        plt.savefig("/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_Wiki/logs_trees_cpp/graphs_trees_cpp_postprocess/entropy_ctxLen64_vs_vocSize_for_ctxSeen.jpg")
+        plt.savefig("/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict/graphs_trees_cpp_postprocess/entropy_ctxLen64_vs_vocSize_for_ctxSeen.jpg")
 
                 
                 
