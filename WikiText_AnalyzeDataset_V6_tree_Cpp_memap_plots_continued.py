@@ -104,41 +104,6 @@ import math
 
 
 
-
-def calc_data_context_info(context_length, vocab_size, vocab_source, AR_training, context_tree):
-
-    ds = PretokDatasetSequences("train", context_length, vocab_size, vocab_source, num_stories, AR_training = AR_training)
-    dl = torch.utils.data.DataLoader(
-        ds, batch_size=1000, pin_memory=True, num_workers=0
-    )
-
-
-    start_time = time.time()
-    
-    num_datapoints = 0
-    print("Creating context dictionaries: ")
-    for batch_idx, X in tqdm(enumerate(dl)):
-        context_tree.insert(X)
-        num_datapoints += X.shape[0]
-        del X
-        gc.collect()
-
-    del dl
-    del ds
-    gc.collect()
-
-    end_time = time.time() - start_time
-    print("Parse Data took " + str(end_time) + " seconds!")
-
-    print("Entropy calculations took " + str(end_time) + " seconds!")
-
-    print("num_datapoints: " + str(num_datapoints))
-
-
-    return context_tree
-
-
-
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
 
@@ -377,7 +342,7 @@ if __name__ == "__main__":
             else:
                 # print(f"Context: {X}")
                 context_tree.insert(X)
-                context_tree.save_metadata()
+                # context_tree.save_metadata()
                 del X
 
                 if milestone_index < len(milestones) and contexts_count >= milestones[milestone_index]:

@@ -74,12 +74,23 @@ private:
         return reinterpret_cast<std::pair<int64_t, int64_t>*>(mapped_memory + node->children_offset);
     }
 
+    // size_t allocate_space(size_t size) {
+    //     size_t offset = file_size;
+    //     file_size += size;
+    //     if (file_size > allocated_size) {
+    //         throw std::runtime_error("Exceeded pre-allocated file size");
+    //     }
+    //     return offset;
+    // }
+
+    // Modify the allocate_space function to periodically update critical info
     size_t allocate_space(size_t size) {
         size_t offset = file_size;
         file_size += size;
         if (file_size > allocated_size) {
             throw std::runtime_error("Exceeded pre-allocated file size");
         }
+        
         return offset;
     }
 
@@ -218,14 +229,41 @@ private:
     }
 
 
+    // void load_existing_trie() {
+    //     struct stat st;
+    //     if (fstat(fd, &st) == -1) {
+    //         close(fd);
+    //         throw std::runtime_error("Failed to get file size");
+    //     }
+    //     file_size = st.st_size;
+    //     allocated_size = file_size;
+
+    //     mapped_memory = static_cast<char*>(mmap(NULL, allocated_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+    //     if (mapped_memory == MAP_FAILED) {
+    //         close(fd);
+    //         throw std::runtime_error("Failed to map file to memory");
+    //     }
+
+    //     TrieNode* root = get_node(0);
+    //     if (root->num_children == 0) {
+    //         throw std::runtime_error("Invalid root node: count or num_children is zero");
+    //     }
+    //     if (root->children_offset >= file_size) {
+    //         throw std::runtime_error("Invalid children offset: larger than file size");
+    //     }
+    //     num_unique_contexts.store(root->count);
+    //     num_total_contexts.store(root->num_children);  // Assuming we store total contexts in root's num_children
+    //     context_length = root->node_level;  // Assuming we store context_length in root's node_level
+    //     // Add more initialization as needed
+    // }
+
     void load_existing_trie() {
         struct stat st;
         if (fstat(fd, &st) == -1) {
             close(fd);
             throw std::runtime_error("Failed to get file size");
         }
-        file_size = st.st_size;
-        allocated_size = file_size;
+        allocated_size = st.st_size;
 
         mapped_memory = static_cast<char*>(mmap(NULL, allocated_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
         if (mapped_memory == MAP_FAILED) {
@@ -233,17 +271,13 @@ private:
             throw std::runtime_error("Failed to map file to memory");
         }
 
+        safe_load_and_recalculate();
+
+        // Validate root node
         TrieNode* root = get_node(0);
-        if (root->num_children == 0) {
-            throw std::runtime_error("Invalid root node: count or num_children is zero");
+        if (root->num_children == 0 || root->children_offset >= file_size) {
+            throw std::runtime_error("Invalid root node");
         }
-        if (root->children_offset >= file_size) {
-            throw std::runtime_error("Invalid children offset: larger than file size");
-        }
-        num_unique_contexts.store(root->count);
-        num_total_contexts.store(root->num_children);  // Assuming we store total contexts in root's num_children
-        context_length = root->node_level;  // Assuming we store context_length in root's node_level
-        // Add more initialization as needed
     }
 
 
@@ -357,69 +391,10 @@ public:
                 current_level++;
             }
         }
+
+        // update_critical_info();
     }
 
-
-    // void insert(torch::Tensor tensor) {
-    //     auto accessor = tensor.accessor<int64_t, 2>();
-    //     for (int64_t i = 0; i < accessor.size(0); i++) {
-    //         size_t current_offset = 0;
-    //         for (int64_t j = 0; j < accessor.size(1); j++) {
-    //             int64_t value = accessor[i][j];
-    //             TrieNode* current = get_node(current_offset);
-                
-    //             // Debug: Check node validity
-    //             if (current == nullptr || current_offset >= file_size) {
-    //                 std::cout << "Error: Invalid node at offset " << current_offset << std::endl;
-    //                 return;
-    //             }
-
-    //             int64_t child_index = -1;
-    //             if (current->num_children > 0) {
-    //                 std::pair<int64_t, int64_t>* children = get_children(current);
-    //                 // Debug: Check children array validity
-    //                 if (children == nullptr || current->children_offset >= file_size) {
-    //                     std::cout << "Error: Invalid children array at offset " << current->children_offset << std::endl;
-    //                     return;
-    //                 }
-    //                 child_index = find_child(children, current->num_children, value);
-    //             }
-
-    //             if (child_index == -1) {
-    //                 size_t new_node_offset = allocate_node(current->node_level);
-    //                 // save_metadata();
-    //                 // Debug: Check allocation
-    //                 if (new_node_offset >= file_size) {
-    //                     std::cout << "Error: Node allocation failed. Offset: " << new_node_offset << std::endl;
-    //                     return;
-    //                 }
-
-    //                 if (current->num_children == 0) {
-    //                     current->children_offset = allocate_children(1);
-    //                 } else {
-    //                     size_t new_children_offset = allocate_children(current->num_children + 1);
-    //                     // Debug: Check reallocation
-    //                     if (new_children_offset >= file_size) {
-    //                         std::cout << "Error: Children reallocation failed. Offset: " << new_children_offset << std::endl;
-    //                         return;
-    //                     }
-    //                     std::memcpy(mapped_memory + new_children_offset, get_children(current), 
-    //                                 current->num_children * sizeof(std::pair<int64_t, int64_t>));
-    //                     current->children_offset = new_children_offset;
-    //                 }
-
-    //                 insert_child(current, value, new_node_offset);
-    //                 current_offset = new_node_offset;
-    //             } else {
-    //                 current_offset = get_children(current)[child_index].second;
-    //             }
-
-    //             // std::cout << "File size " << file_size << std::endl;
-    //             get_node(current_offset)->count++;
-    //         }
-    //     }
-    //     // save_metadata();
-    // }
 
     std::unordered_map<std::vector<int64_t>, int64_t> collect_all_sequences() {
         std::unordered_map<std::vector<int64_t>, int64_t> sequences;
@@ -526,101 +501,6 @@ public:
         return entropy_per_level;
     }
 
-    void save_metadata() {
-        std::ofstream file(filename_metadata, std::ios::binary);
-        if (!file) {
-            throw std::runtime_error("Failed to open file for saving metadata");
-        }
-
-        // Save metadata
-        file.write(reinterpret_cast<char*>(&file_size), sizeof(size_t));
-        file.write(reinterpret_cast<char*>(&allocated_size), sizeof(size_t));
-        int64_t unique_contexts = num_unique_contexts.load();
-        int64_t total_contexts = num_total_contexts.load();
-        file.write(reinterpret_cast<char*>(&unique_contexts), sizeof(int64_t));
-        file.write(reinterpret_cast<char*>(&total_contexts), sizeof(int64_t));
-        file.write(reinterpret_cast<char*>(&context_length), sizeof(int64_t));
-
-        // Save num_unique_contexts_per_level
-        size_t map_size = num_unique_contexts_per_level.size();
-        file.write(reinterpret_cast<char*>(&map_size), sizeof(size_t));
-        for (const auto& pair : num_unique_contexts_per_level) {
-            file.write(reinterpret_cast<const char*>(&pair.first), sizeof(int64_t));
-            file.write(reinterpret_cast<const char*>(&pair.second), sizeof(int));
-        }
-
-        // Save num_total_contexts_per_level
-        map_size = num_total_contexts_per_level.size();
-        file.write(reinterpret_cast<char*>(&map_size), sizeof(size_t));
-        for (const auto& pair : num_total_contexts_per_level) {
-            file.write(reinterpret_cast<const char*>(&pair.first), sizeof(int64_t));
-            file.write(reinterpret_cast<const char*>(&pair.second), sizeof(int));
-        }
-
-        // Save entropy_per_level
-        map_size = entropy_per_level.size();
-        file.write(reinterpret_cast<char*>(&map_size), sizeof(size_t));
-        for (const auto& pair : entropy_per_level) {
-            file.write(reinterpret_cast<const char*>(&pair.first), sizeof(int64_t));
-            file.write(reinterpret_cast<const char*>(&pair.second), sizeof(double));
-        }
-
-        file.close();
-    }
-
-    void load_metadata(const std::string& metadata_filename) {
-        std::ifstream file(metadata_filename, std::ios::binary);
-        if (!file) {
-            throw std::runtime_error("Failed to open file for loading metadata");
-        }
-
-        // Load metadata
-        file.read(reinterpret_cast<char*>(&file_size), sizeof(size_t));
-        file.read(reinterpret_cast<char*>(&allocated_size), sizeof(size_t));
-        int64_t unique_contexts, total_contexts;
-        file.read(reinterpret_cast<char*>(&unique_contexts), sizeof(int64_t));
-        file.read(reinterpret_cast<char*>(&total_contexts), sizeof(int64_t));
-        num_unique_contexts.store(unique_contexts);
-        num_total_contexts.store(total_contexts);
-        file.read(reinterpret_cast<char*>(&context_length), sizeof(int64_t));
-
-        // Load num_unique_contexts_per_level
-        size_t map_size;
-        file.read(reinterpret_cast<char*>(&map_size), sizeof(size_t));
-        num_unique_contexts_per_level.clear();
-        for (size_t i = 0; i < map_size; ++i) {
-            int64_t level;
-            int count;
-            file.read(reinterpret_cast<char*>(&level), sizeof(int64_t));
-            file.read(reinterpret_cast<char*>(&count), sizeof(int));
-            num_unique_contexts_per_level[level] = count;
-        }
-
-        // Load num_total_contexts_per_level
-        file.read(reinterpret_cast<char*>(&map_size), sizeof(size_t));
-        num_total_contexts_per_level.clear();
-        for (size_t i = 0; i < map_size; ++i) {
-            int64_t level;
-            int count;
-            file.read(reinterpret_cast<char*>(&level), sizeof(int64_t));
-            file.read(reinterpret_cast<char*>(&count), sizeof(int));
-            num_total_contexts_per_level[level] = count;
-        }
-
-        // Load entropy_per_level
-        file.read(reinterpret_cast<char*>(&map_size), sizeof(size_t));
-        entropy_per_level.clear();
-        for (size_t i = 0; i < map_size; ++i) {
-            int64_t level;
-            double entropy;
-            file.read(reinterpret_cast<char*>(&level), sizeof(int64_t));
-            file.read(reinterpret_cast<char*>(&entropy), sizeof(double));
-            entropy_per_level[level] = entropy;
-        }
-
-        file.close();
-    }
-
 
     bool validate_load() {
         if (!mapped_memory) {
@@ -681,6 +561,80 @@ public:
 
         return true;
     }
+
+    void update_critical_info() {
+        // Atomic operation to update file_size
+        __sync_synchronize(); // Memory barrier
+        size_t current_file_size = __atomic_load_n(&file_size, __ATOMIC_SEQ_CST);
+        
+        // Update metadata file
+        std::ofstream file(filename_metadata, std::ios::binary);
+        if (!file) {
+            throw std::runtime_error("Failed to open file for saving metadata");
+        }
+
+        file.write(reinterpret_cast<char*>(&current_file_size), sizeof(size_t));
+        file.write(reinterpret_cast<char*>(&allocated_size), sizeof(size_t));
+        int64_t unique_contexts = num_unique_contexts.load();
+        int64_t total_contexts = num_total_contexts.load();
+        file.write(reinterpret_cast<char*>(&unique_contexts), sizeof(int64_t));
+        file.write(reinterpret_cast<char*>(&total_contexts), sizeof(int64_t));
+        file.write(reinterpret_cast<char*>(&context_length), sizeof(int64_t));
+
+        file.close();
+    }
+
+    void safe_load_and_recalculate() {
+        // Load existing metadata
+        std::ifstream file(filename_metadata, std::ios::binary);
+        if (!file) {
+            throw std::runtime_error("Failed to open file for loading metadata");
+        }
+
+        file.read(reinterpret_cast<char*>(&file_size), sizeof(size_t));
+        file.read(reinterpret_cast<char*>(&allocated_size), sizeof(size_t));
+        file.read(reinterpret_cast<char*>(&num_unique_contexts), sizeof(int64_t));
+        file.read(reinterpret_cast<char*>(&num_total_contexts), sizeof(int64_t));
+        file.read(reinterpret_cast<char*>(&context_length), sizeof(int64_t));
+
+        file.close();
+
+        // Recalculate num_unique_contexts, num_total_contexts, and other metrics
+        num_unique_contexts = 0;
+        num_total_contexts = 0;
+        num_unique_contexts_per_level.clear();
+        num_total_contexts_per_level.clear();
+
+        recalculate_metrics(0); // Start from the root
+
+        // Recalculate entropy
+        calculate_and_get_entropy();
+    }
+
+    
+    void recalculate_metrics(size_t node_offset) {
+        if (node_offset >= file_size) {
+            throw std::runtime_error("Node offset out of bounds");
+        }
+
+        TrieNode* node = get_node(node_offset);
+        
+        if (node->num_children > 0) {
+            num_unique_contexts++;
+            num_unique_contexts_per_level[node->node_level]++;
+        }
+
+        num_total_contexts += node->count;
+        num_total_contexts_per_level[node->node_level] += node->count;
+
+        std::pair<int64_t, int64_t>* children = get_children(node);
+        for (int64_t i = 0; i < node->num_children; ++i) {
+            if (children[i].second >= file_size) {
+                throw std::runtime_error("Child offset out of bounds");
+            }
+            recalculate_metrics(children[i].second);
+        }
+    }
     
 
 };
@@ -716,7 +670,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("get_num_unique_contexts_per_level", &Trie_memap_sorted::get_num_unique_contexts_per_level)
         .def("get_num_total_contexts_per_level", &Trie_memap_sorted::get_num_total_contexts_per_level)
         .def("get_entropy_per_level", &Trie_memap_sorted::get_entropy_per_level)
-        .def("save_metadata", &Trie_memap_sorted::save_metadata)
-        .def("load_metadata", &Trie_memap_sorted::load_metadata)
+        .def("recalculate_metrics", &Trie_memap_sorted::recalculate_metrics)
+        .def("safe_load_and_recalculate", &Trie_memap_sorted::safe_load_and_recalculate)
+        .def("update_critical_info", &Trie_memap_sorted::update_critical_info)
         .def("validate_load", &Trie_memap_sorted::validate_load);
 }
