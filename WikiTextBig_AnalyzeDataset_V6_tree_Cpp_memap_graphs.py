@@ -56,7 +56,8 @@ if __name__ == "__main__":
     To tokenize data with the Llama 2 tokenizer:
     """
 
-    vocab_sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8196, 16392]
+    # vocab_sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8196, 16392]
+    vocab_sizes = [128, 256, 512, 1024, 2048, 4096, 8196, 16392]
     # context_lenghts = [32, 64, 128, 256, 512, 1024]
     context_lenghts = [32]
 
@@ -113,7 +114,7 @@ if __name__ == "__main__":
         # input()
 
         colors = ["#FF7043", "#FF5252", "#FF4081", "#E91E63", "#D81B60", "#C2185B", "#AD1457", "#880E4F", "#6A1B9A"]
-        colors_dict = {vocab_sizes[i]: colors[i] for i in range(0, len(colors))}
+        colors_dict = {vocab_sizes[i]: colors[i] for i in range(0, len(vocab_sizes))}
         plt.figure(figsize=(8, 5))
         for vocab_size in vocab_sizes:
             plt.plot(context_lenghts, list(entropies_for_vocab[vocab_size].values()), color = colors_dict[vocab_size], label = "Voc = " + str(vocab_size))

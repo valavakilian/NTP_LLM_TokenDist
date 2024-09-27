@@ -158,51 +158,107 @@ private:
     }
 
 
-    double calculate_and_sum_entropy(size_t node_offset) {
-        TrieNode* node = get_node(node_offset);
-        std::pair<int64_t, int64_t>* children = get_children(node);
+    // double calculate_and_sum_entropy(size_t node_offset) {
+    //     TrieNode* node = get_node(node_offset);
+    //     std::pair<int64_t, int64_t>* children = get_children(node);
         
-        double Pi_j = static_cast<double>(node->count) / num_total_contexts;
+    //     double Pi_j = static_cast<double>(node->count) / num_total_contexts;
         
         
-        double context_entropy = 0.0;
-        int64_t context_total = 0;
+    //     double context_entropy = 0.0;
+    //     int64_t context_total = 0;
 
-        if (node->num_children > 0){
-            num_unique_contexts++;  // Increment node count when allocating a new node
-            num_unique_contexts_per_level[node->node_level]++;
-        }
+    //     if (node->num_children > 0){
+    //         num_unique_contexts++;  // Increment node count when allocating a new node
+    //         num_unique_contexts_per_level[node->node_level]++;
+    //     }
 
-        // Calculate total count for this context
-        for (int64_t i = 0; i < node->num_children; ++i) {
-            TrieNode* child = get_node(children[i].second);
-            context_total += child->count;
-        }
+    //     // Calculate total count for this context
+    //     for (int64_t i = 0; i < node->num_children; ++i) {
+    //         TrieNode* child = get_node(children[i].second);
+    //         context_total += child->count;
+    //     }
 
-        // Calculate entropy for this context
-        if (context_total > 0) {
+    //     // Calculate entropy for this context
+    //     if (context_total > 0) {
+    //         for (int64_t i = 0; i < node->num_children; ++i) {
+    //             TrieNode* child = get_node(children[i].second);
+    //             double p_t = static_cast<double>(child->count) / context_total;
+    //             if (p_t > 0) {
+    //                 context_entropy -= p_t * log(p_t);
+    //             }
+    //         }
+    //     }
+
+    //     double node_contribution = Pi_j * context_entropy;
+    //     if (node->num_children > 0){
+    //         double Pi_j_level = static_cast<double>(node->count) / num_total_contexts_per_level[node -> node_level];
+    //         entropy_per_level[node -> node_level] += Pi_j_level * context_entropy;
+    //     }
+
+    //     // Recursively calculate entropy for all children
+    //     double children_entropy = 0.0;
+    //     for (int64_t i = 0; i < node->num_children; ++i) {
+    //         children_entropy += calculate_and_sum_entropy(children[i].second);
+    //     }
+
+    //     return node_contribution + children_entropy;
+    // }
+
+
+    double calculate_and_sum_entropy(size_t root_offset) {
+        auto start_time = std::chrono::steady_clock::now();
+        const auto timeout_duration = std::chrono::seconds(5000);
+        double total_entropy = 0.0;
+        std::stack<size_t> node_stack;
+        node_stack.push(root_offset);
+
+        while (!node_stack.empty()) {
+            if (std::chrono::steady_clock::now() - start_time > timeout_duration) {
+                std::cout << "Entropy calculation timed out after 5000 seconds. Returning default value." << std::endl;
+                return 100.0;
+            }
+
+            size_t current_offset = node_stack.top();
+            node_stack.pop();
+
+            TrieNode* node = get_node(current_offset);
+            std::pair<int64_t, int64_t>* children = get_children(node);
+            
+            double Pi_j = static_cast<double>(node->count) / num_total_contexts;
+            double context_entropy = 0.0;
+            int64_t context_total = 0;
+
             for (int64_t i = 0; i < node->num_children; ++i) {
                 TrieNode* child = get_node(children[i].second);
-                double p_t = static_cast<double>(child->count) / context_total;
-                if (p_t > 0) {
-                    context_entropy -= p_t * log(p_t);
+                context_total += child->count;
+            }
+
+            if (context_total > 0) {
+                for (int64_t i = 0; i < node->num_children; ++i) {
+                    TrieNode* child = get_node(children[i].second);
+                    double p_t = static_cast<double>(child->count) / context_total;
+                    if (p_t > 0) {
+                        context_entropy -= p_t * std::log(p_t);
+                    }
                 }
+            }
+
+            double node_contribution = Pi_j * context_entropy;
+            total_entropy += node_contribution;
+
+            if (node->num_children > 0) {
+                num_unique_contexts++;
+                num_unique_contexts_per_level[node->node_level]++;
+                entropy_per_level[node->node_level] += node_contribution;
+            }
+
+            for (int64_t i = 0; i < node->num_children; ++i) {
+                node_stack.push(children[i].second);
             }
         }
 
-        double node_contribution = Pi_j * context_entropy;
-        if (node->num_children > 0){
-            double Pi_j_level = static_cast<double>(node->count) / num_total_contexts_per_level[node -> node_level];
-            entropy_per_level[node -> node_level] += Pi_j_level * context_entropy;
-        }
-
-        // Recursively calculate entropy for all children
-        double children_entropy = 0.0;
-        for (int64_t i = 0; i < node->num_children; ++i) {
-            children_entropy += calculate_and_sum_entropy(children[i].second);
-        }
-
-        return node_contribution + children_entropy;
+        return total_entropy;
     }
     
 
