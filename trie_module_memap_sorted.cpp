@@ -580,7 +580,7 @@ public:
             std::cout << "Error: Invalid root node" << std::endl;
             return false;
         }
-
+        
         // Check if children offset is within file bounds
         if (root->num_children > 0 && (root->children_offset + root->num_children * sizeof(std::pair<int64_t, int64_t>) > file_size)) {
             std::cout << "Error: Children offset out of bounds" << std::endl;

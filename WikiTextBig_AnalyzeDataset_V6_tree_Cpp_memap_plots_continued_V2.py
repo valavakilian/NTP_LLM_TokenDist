@@ -266,9 +266,9 @@ if __name__ == "__main__":
 
     vocab_source = "custom"
     AR_training = True
-    save_tree_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict_V2/context_trees_memap_cpp/"
-    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict_V2/graph_trees_cpp/"
-    save_logs_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict_V2/logs_trees_cpp/"
+    save_tree_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict_V3/context_trees_memap_cpp/"
+    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict_V3/graph_trees_cpp/"
+    save_logs_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_childDict_V3/logs_trees_cpp/"
     save_logs_filename = f"voc_{args.vocab_size}_ctxLen_{args.context_length}.pkl"
     memap_filename = f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}.bin"
     metadata_filename = f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}_metadata.bin"
