@@ -285,28 +285,6 @@ private:
         return current_offset;
     }
 
-    void save_metadata(const std::string& metadata_filename) {
-        std::ofstream file(metadata_filename);
-        if (file.is_open()) {
-            file << file_size << "\n";
-            file << allocated_size << "\n";
-            file << num_unique_contexts.load() << "\n";
-            file << num_total_contexts.load() << "\n";
-            file << context_length << "\n";
-
-            for (const auto& [level, count] : num_unique_contexts_per_level) {
-                file << "level " << level << " " << count << "\n";
-            }
-            file.close();
-        }
-
-        std::cout << "----Saver----" << std::endl;
-        std::cout << "Metadata saved to " << metadata_filename << std::endl;
-        std::cout << "Memory-mapped file size: " << file_size << " Giga bytes" << std::endl;
-        std::cout << "Memory-mapped allocated size: " << allocated_size << " Giga bytes" << std::endl;
-
-    }
-
 
 public:
     Trie_memap_sorted(const std::string& fname, const std::string& metadata_fname, size_t initial_size_gb, int64_t context_length) : filename(fname),  metadata_filename(metadata_fname) , context_length(context_length) {
@@ -374,6 +352,28 @@ public:
         load_metadata(metadata_filename);
     }
 
+    void save_metadata() {
+        std::ofstream file(metadata_filename);
+        if (file.is_open()) {
+            file << file_size << "\n";
+            file << allocated_size << "\n";
+            file << num_unique_contexts.load() << "\n";
+            file << num_total_contexts.load() << "\n";
+            file << context_length << "\n";
+
+            for (const auto& [level, count] : num_unique_contexts_per_level) {
+                file << "level " << level << " " << count << "\n";
+            }
+            file.close();
+        }
+
+        std::cout << "----Saver----" << std::endl;
+        std::cout << "Metadata saved to " << metadata_filename << std::endl;
+        std::cout << "Memory-mapped file size: " << file_size << " Giga bytes" << std::endl;
+        std::cout << "Memory-mapped allocated size: " << allocated_size << " Giga bytes" << std::endl;
+
+    }
+
     void load_metadata(const std::string& metadata_filename) {
         // Open the metadata file
         std::ifstream file(metadata_filename);
@@ -404,7 +404,6 @@ public:
 
 
     ~Trie_memap_sorted() {
-        save_metadata(metadata_filename);
         if (mapped_memory != MAP_FAILED) {
             munmap(mapped_memory, allocated_size);
         }
@@ -613,5 +612,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("get_num_unique_contexts_per_level", &Trie_memap_sorted::get_num_unique_contexts_per_level)
         .def("get_num_total_contexts_per_level", &Trie_memap_sorted::get_num_total_contexts_per_level)
         .def("get_entropy_per_level", &Trie_memap_sorted::get_entropy_per_level)
-        .def("load_metadata", &Trie_memap_sorted::load_metadata);
+        .def("load_metadata", &Trie_memap_sorted::load_metadata)
+        .def("save_metadata", &Trie_memap_sorted::save_metadata);
 }

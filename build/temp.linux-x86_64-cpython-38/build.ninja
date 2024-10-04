@@ -15,7 +15,7 @@ rule compile
 
 
 
-build /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/build/temp.linux-x86_64-cpython-38/arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/trie_module_memap_reload.o: compile /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/trie_module_memap_reload.cpp
+build /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/build/temp.linux-x86_64-cpython-38/arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/trie_module_memap_entropyOpt.o: compile /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/trie_module_memap_entropyOpt.cpp
 
 
 

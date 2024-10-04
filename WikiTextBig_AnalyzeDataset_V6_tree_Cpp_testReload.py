@@ -403,6 +403,7 @@ if __name__ == "__main__":
 
         entropy_tree = context_tree.calculate_and_get_entropy()
         print("entropy before load is: " + str(entropy_tree))
+        context_tree.save_metadata()
 
         del context_tree
 
@@ -412,9 +413,7 @@ if __name__ == "__main__":
         print("entropy after load is: " + str(entropy_tree))
 
 
-
-
-
+        
 
         dataloader = create_dataloader(tokenized_data[0:1000], context_length, batch_size)
 
@@ -475,6 +474,10 @@ if __name__ == "__main__":
         print("Here")
         entropy_tree = context_tree.calculate_and_get_entropy()
         print("entropy before load is: " + str(entropy_tree))
+
+        context_tree.save_metadata()
+
+        del context_tree
         
     except RuntimeError as e:
         print(f"An error occurred: {e}")
