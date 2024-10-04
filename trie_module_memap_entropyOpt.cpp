@@ -153,8 +153,9 @@ private:
     std::map<int64_t, double> entropy_per_level;
 
     const size_t array_size = 500000000; // Size of the array
-    MemMapArray countLog_array;
-    MemMapArray ctxLen_array;
+    MemMapArray<double> countLog_array;
+    MemMapArray<int> ctxLen_array;
+    MemMapArray<int> ctxCount_array;
 
 
     TrieNode* get_node(size_t offset) {
@@ -188,6 +189,7 @@ private:
         TrieNode* new_node = get_node(offset);
         new_node->node_level = parent_level + 1;
         new_node->node_index = node_counter;
+        ctxLen_array[new_node->node_index] = new_node->node_level; 
         node_counter += 1;
         return offset;
     }
@@ -329,8 +331,10 @@ private:
 
 
 public:
-    Trie_memap_sorted(const std::string& fname, const std::string& metadata_fname, const std::string& countLog_array_fname, const std::string& ctxLen_array_fname, size_t initial_size_gb, int64_t context_length) : filename(fname),  metadata_filename(metadata_fname), countLog_array_filename(countLog_array_fname), ctxLen_array_filename(ctxLen_array_fname), context_length(context_length) {
+    Trie_memap_sorted(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
+    : filename(fname), context_length(context_length), countLog_array(filename + "_countLog_arr.dat", array_size), ctxLen_array(filename + "_ctxLen_arr.dat", array_size), ctxCount_array(filename + "_ctxCount_arr.dat", array_size) {
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
+        filename = fname + ".bin";
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
             throw std::runtime_error("Failed to open file for memory mapping");
@@ -348,6 +352,11 @@ public:
             throw std::runtime_error("Failed to map file to memory");
         }
 
+        metadata_filename = filename + "_metadata.bin";
+        // countLog_array_filename = filename + "_countLog_arr.dat";
+        // ctxLen_array_filename = filename + "_ctxLen_arr.dat";
+
+
         // Initialize the root node
         file_size = sizeof(TrieNode);
         TrieNode* root = get_node(0);
@@ -361,14 +370,14 @@ public:
         num_total_contexts = 0;
         node_counter = 0;
 
-        MemMapArray countLog_array(array_size, countLog_array_filename);
-        MemMapArray ctxLen_array(array_size, ctxLen_array_filename);
+        // countLog_array(countLog_array_filename, array_size);
+        // ctxLen_array(ctxLen_array_filename, array_size);
 
         DEBUG_PRINT("Trie initialized with allocated size: " << allocated_size << " bytes");
     }
 
     // Constructor to load an existing Trie from a file
-    Trie_memap_sorted(const std::string& fname, const std::string& metadata_fname, const std::string& countLog_array_fname, const std::string& ctxLen_array_fname) : filename(fname),  metadata_filename(metadata_fname), countLog_array_filename(countLog_array_fname), ctxLen_array_filename(ctxLen_array_fname) {
+    Trie_memap_sorted(const std::string& fname) : filename(fname), countLog_array(filename + "_countLog_arr.dat"), ctxLen_array(filename + "_ctxLen_arr.dat"), ctxCount_array(filename + "_ctxCount_arr.dat") {
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
@@ -393,13 +402,18 @@ public:
             exit(EXIT_FAILURE);
         }
 
+        metadata_filename = filename + "_metadata.bin";
+        // countLog_array_filename = filename + "_countLog_arr.dat";
+        // ctxLen_array_filename = filename + "_ctxLen_arr.dat";
+        
+
         // Step 4: Set the root node to the start of the mapped file memory
         TrieNode* root = reinterpret_cast<TrieNode*>(mapped_memory);
 
         load_metadata(metadata_filename);
 
-        MemMapArray countLog_array(countLog_array_filename);
-        MemMapArray ctxLen_array(ctxLen_array_filename);
+        // countLog_array(countLog_array_filename);
+        // ctxLen_array(ctxLen_array_filename);
     }
 
     void save_metadata() {
@@ -471,6 +485,10 @@ public:
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
         
+
+        int64_t c_t_temp;
+        double update_countLog_temp;
+
         auto accessor = tensor.accessor<int64_t, 2>();
         for (int64_t i = 0; i < accessor.size(0); i++) {
             int64_t current_level = 0;
@@ -516,7 +534,11 @@ public:
                     current_offset = get_children(current)[child_index].second;
                 }
 
-                countLog_array[current->node_index] += -1 *  
+                c_t_temp = get_node(current_offset)->count;
+                update_countLog_temp = pow(c_t_temp + 1, c_t_temp + 1)/pow(c_t_temp, c_t_temp);
+                
+                countLog_array[current->node_index] += std::log(update_countLog_temp);
+                ctxCount_array[current->node_index] += 1;
 
                 get_node(current_offset)->count++;
                 current_level++;
@@ -648,8 +670,8 @@ py::dict convert_to_python_dict(const std::unordered_map<std::vector<int64_t>, i
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<Trie_memap_sorted>(m, "Trie_memap_sorted")
-        .def(py::init<const std::string&, const std::string&, size_t, int64_t>())
-        .def(py::init<const std::string&, const std::string&>())
+        .def(py::init<const std::string&, size_t, int64_t>())
+        .def(py::init<const std::string&>())
         .def("insert", &Trie_memap_sorted::insert)
         .def("collect_all_sequences", [](Trie_memap_sorted& trie) {
             auto sequences = trie.collect_all_sequences();
@@ -670,9 +692,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("save_metadata", &Trie_memap_sorted::save_metadata);
 
 
-    py::class_<MemMapArray<int>>(m, "MemMapArrayInt")
+    py::class_<MemMapArray<int64_t>>(m, "MemMapArrayInt")
         .def(py::init<const std::string&, size_t>())
-        .def("get_size", &MemMapArray<int>::getSize)
-        .def("__getitem__", [](MemMapArray<int> &self, size_t index) { return self[index]; });
+        .def("get_size", &MemMapArray<int64_t>::getSize)
+        .def("__getitem__", [](MemMapArray<int64_t> &self, size_t index) { return self[index]; });
+    
+    py::class_<MemMapArray<double>>(m, "MemMapArrayDouble")
+        .def(py::init<const std::string&, size_t>())
+        .def("get_size", &MemMapArray<double>::getSize)
+        .def("__getitem__", [](MemMapArray<double> &self, size_t index) { return self[index]; });
 
 }
