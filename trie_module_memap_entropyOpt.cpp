@@ -583,6 +583,37 @@ public:
         return total_entropy ;  // Normalize by total number of nodes
     }
 
+
+    double calculate_and_get_entropy_faster() {
+        
+        // int64_t total_N = 0;
+        double total_entropy = 0;
+        double entropy_temp = 0;
+
+        for (auto& pair : num_unique_contexts_per_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+        for (auto& pair : entropy_per_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+
+        for(int j = 0; j < node_counter; j++){
+            entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
+            // total_N += ctxCount_array[j];
+            num_unique_contexts_per_level[ctxLen_array[j]] += 1;
+            entropy_per_level[ctxLen_array[j]] += entropy_temp;
+            total_entropy += entropy_temp;
+        }
+        total_entropy = total_entropy / num_total_contexts;
+        for(int t = 0; t < context_length; t++){
+            entropy_per_level[t] /= num_total_contexts;
+        }
+
+        DEBUG_PRINT("Count for the zeroths node " << get_node(0)->count);
+        
+        return total_entropy ;  // Normalize by total number of nodes
+    }
+
     int64_t get_num_unique_contexts() const {
         return num_unique_contexts.load();
     }
@@ -688,6 +719,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("get_num_unique_contexts_per_level", &Trie_memap_sorted::get_num_unique_contexts_per_level)
         .def("get_num_total_contexts_per_level", &Trie_memap_sorted::get_num_total_contexts_per_level)
         .def("get_entropy_per_level", &Trie_memap_sorted::get_entropy_per_level)
+        .def("calculate_and_get_entropy_faster", &Trie_memap_sorted::calculate_and_get_entropy_faster)
         .def("load_metadata", &Trie_memap_sorted::load_metadata)
         .def("save_metadata", &Trie_memap_sorted::save_metadata);
 
