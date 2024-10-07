@@ -18,6 +18,7 @@
 #include <iostream>
 #include <sys/mman.h>
 #include <algorithm>
+#include <unistd.h> // for sleep()
 
 // #include <nlohmann/json.hpp>  // Include a JSON library like nlohmann/json for C++
 
@@ -562,21 +563,28 @@ public:
                 if (current->node_index != -1 && c_t_temp != 0){
                     if(logcalc_memory[c_t_temp] == -1){
                         logcalc_memory[c_t_temp] = (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp);
-                        countLog_array[current->node_index] += logcalc_memory[c_t_temp];
-                    } else {
-                        countLog_array[current->node_index] += logcalc_memory[c_t_temp];
+                        // DEBUG_PRINT("logcalc_memory for " << c_t_temp << " is " << logcalc_memory[c_t_temp]);
+                        // sleep(1); 
                     }
+                    //     countLog_array[current->node_index] += logcalc_memory[c_t_temp];
+                    // } else {
+                    //     countLog_array[current->node_index] += logcalc_memory[c_t_temp];
+                    // }
+                    countLog_array[current->node_index] += logcalc_memory[c_t_temp];
                     // countLog_array[current->node_index] += (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp);
                     // DEBUG_PRINT("std::log(update_countLog_temp): " << (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp));
-                    ctxCount_array[current->node_index] += 1;
+                    
                 }
-                
+                ctxCount_array[current->node_index] += 1;
                 
 
                 get_node(current_offset)->count++;
                 current_level++;
             }
         }
+
+        
+        
 
         // update_critical_info();
     }
@@ -641,6 +649,7 @@ public:
             if (ctxCount_array[j] == 0){
                 counter += 1;
                 if (counter == 100){
+                    DEBUG_PRINT("Quitting since the counter is 0.");
                     return 0;
                 }
             }
