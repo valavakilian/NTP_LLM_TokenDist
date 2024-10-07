@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <sys/mman.h>
+#include <algorithm>
 
 // #include <nlohmann/json.hpp>  // Include a JSON library like nlohmann/json for C++
 
@@ -64,6 +65,8 @@ public:
 
         // Initialize the memory to zero
         std::memset(mapped_memory, 0, size * sizeof(T));
+
+        // DEBUG_PRINT("Initiated my memaparray. size is " << size << " .");
     }
 
 
@@ -102,6 +105,8 @@ public:
     }
 
     T& operator[](size_t index) {
+        // DEBUG_PRINT("Operator. size is " << size << " .");
+        // DEBUG_PRINT("Operator. index is " << index << " .");
         if (index >= size) {
             throw std::out_of_range("Index out of bounds");
         }
@@ -152,10 +157,13 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
 
-    const size_t array_size = 500000000; // Size of the array
+    const size_t array_size = 1000000000; // Size of the array
     MemMapArray<double> countLog_array;
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
+
+    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
+    std::vector<double> logcalc_memory;
 
 
     TrieNode* get_node(size_t offset) {
@@ -187,10 +195,16 @@ private:
     size_t allocate_node(int64_t parent_level) {
         size_t offset = allocate_space(sizeof(TrieNode));
         TrieNode* new_node = get_node(offset);
-        new_node->node_level = parent_level + 1;
-        new_node->node_index = node_counter;
-        ctxLen_array[new_node->node_index] = new_node->node_level; 
-        node_counter += 1;
+        new_node->node_level = parent_level + 1; 
+        // ctxCount_array[new_node->node_index] += 1; 
+        // DEBUG_PRINT("Node level is : " << new_node->node_level);
+        if (new_node->node_level <= context_length){
+            new_node->node_index = node_counter;
+            ctxLen_array[new_node->node_index] = new_node->node_level;
+            node_counter += 1;
+        } else {
+            new_node->node_index = -1;
+        }
         return offset;
     }
 
@@ -332,9 +346,10 @@ private:
 
 public:
     Trie_memap_sorted(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
-    : filename(fname), context_length(context_length), countLog_array(filename + "_countLog_arr.dat", array_size), ctxLen_array(filename + "_ctxLen_arr.dat", array_size), ctxCount_array(filename + "_ctxCount_arr.dat", array_size) {
+    : filename(fname + ".bin"), context_length(context_length), countLog_array(fname + "_countLog_arr.dat", array_size), 
+    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size),
+    logcalc_memory(size_logcalc_memory, -1) {
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
-        filename = fname + ".bin";
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
             throw std::runtime_error("Failed to open file for memory mapping");
@@ -364,7 +379,7 @@ public:
         root->num_children = 0;
         root->children_offset = 0;
         root->is_root = true;  // Set the root node indicator
-        root->node_index = -1;
+        root->node_index = 0;
 
         num_unique_contexts = 0;  // Count the root node
         num_total_contexts = 0;
@@ -377,7 +392,9 @@ public:
     }
 
     // Constructor to load an existing Trie from a file
-    Trie_memap_sorted(const std::string& fname) : filename(fname), countLog_array(filename + "_countLog_arr.dat"), ctxLen_array(filename + "_ctxLen_arr.dat"), ctxCount_array(filename + "_ctxCount_arr.dat") {
+    Trie_memap_sorted(const std::string& fname) : 
+    filename(fname + ".bin"), countLog_array(fname + "_countLog_arr.dat"), ctxLen_array(fname + "_ctxLen_arr.dat"), 
+    ctxCount_array(fname + "_ctxCount_arr.dat"), logcalc_memory(size_logcalc_memory, -1) {
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
@@ -520,8 +537,10 @@ public:
                     }
 
                     if (current->num_children == 0) {
+                        // DEBUG_PRINT("1 I am being called upon ? ");
                         current->children_offset = allocate_children(1);
                     } else {
+                        // DEBUG_PRINT("2 I am being called upon ? ");
                         size_t new_children_offset = allocate_children(current->num_children + 1);
                         std::memcpy(mapped_memory + new_children_offset, get_children(current), 
                                     current->num_children * sizeof(std::pair<int64_t, int64_t>));
@@ -535,10 +554,24 @@ public:
                 }
 
                 c_t_temp = get_node(current_offset)->count;
-                update_countLog_temp = pow(c_t_temp + 1, c_t_temp + 1)/pow(c_t_temp, c_t_temp);
+                // update_countLog_temp = pow(c_t_temp + 1, c_t_temp + 1)/pow(c_t_temp, c_t_temp);
                 
-                countLog_array[current->node_index] += std::log(update_countLog_temp);
-                ctxCount_array[current->node_index] += 1;
+                // DEBUG_PRINT("c_t_temp: " << c_t_temp);
+                // DEBUG_PRINT("update_countLog_temp: " << update_countLog_temp);
+                
+                if (current->node_index != -1 && c_t_temp != 0){
+                    if(logcalc_memory[c_t_temp] == -1){
+                        logcalc_memory[c_t_temp] = (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp);
+                        countLog_array[current->node_index] += logcalc_memory[c_t_temp];
+                    } else {
+                        countLog_array[current->node_index] += logcalc_memory[c_t_temp];
+                    }
+                    // countLog_array[current->node_index] += (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp);
+                    // DEBUG_PRINT("std::log(update_countLog_temp): " << (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp));
+                    ctxCount_array[current->node_index] += 1;
+                }
+                
+                
 
                 get_node(current_offset)->count++;
                 current_level++;
@@ -578,7 +611,7 @@ public:
         double total_entropy = calculate_and_sum_entropy(0);  // Start from the root
         num_unique_contexts -= 1; // Remove the count for the root node
 
-        DEBUG_PRINT("Count for the zeroths node " << get_node(0)->count);
+        // DEBUG_PRINT("Count for the zeroths node " << get_node(0)->count);
         
         return total_entropy ;  // Normalize by total number of nodes
     }
@@ -597,19 +630,35 @@ public:
             pair.second = 0;  // Set the count to zero for each level
         }
 
-        for(int j = 0; j < node_counter; j++){
+        int64_t total_counter = 0;
+        int counter = 0;
+        for(int j = 1; j < node_counter; j++){
             entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
+
+            // DEBUG_PRINT("ctxCount_array[j] " << ctxCount_array[j]);
+            // DEBUG_PRINT("countLog_array[j] " << countLog_array[j]);
+            // DEBUG_PRINT("entropy_temp " << entropy_temp);
+            if (ctxCount_array[j] == 0){
+                counter += 1;
+                if (counter == 100){
+                    return 0;
+                }
+            }
             // total_N += ctxCount_array[j];
             num_unique_contexts_per_level[ctxLen_array[j]] += 1;
             entropy_per_level[ctxLen_array[j]] += entropy_temp;
             total_entropy += entropy_temp;
+
+            total_counter += ctxCount_array[j];
         }
-        total_entropy = total_entropy / num_total_contexts;
+        total_entropy = -total_entropy / total_counter;
         for(int t = 0; t < context_length; t++){
-            entropy_per_level[t] /= num_total_contexts;
+            entropy_per_level[t] /= -total_counter;
         }
 
-        DEBUG_PRINT("Count for the zeroths node " << get_node(0)->count);
+        // DEBUG_PRINT("Count for the zeroths node " << get_node(0)->count);
+
+        num_unique_contexts = node_counter;
         
         return total_entropy ;  // Normalize by total number of nodes
     }

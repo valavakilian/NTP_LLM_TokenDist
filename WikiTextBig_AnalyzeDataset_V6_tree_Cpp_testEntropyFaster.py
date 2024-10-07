@@ -39,6 +39,7 @@ import hashlib
 
 # import trie_module_memap
 import trie_module_memap_sorted
+import trie_module_memap_sorted_old
 import numpy as np
 
 from datasets import load_from_disk
@@ -62,7 +63,7 @@ def load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length):
     # Merge all text data from train, validation, and test sets
     merged_text = dataset['train']['text'] + dataset['validation']['text'] + dataset['test']['text']
 
-    merged_text = merged_text[0:10000]
+    merged_text = merged_text[0:len(merged_text)]
     # Train the tokenizer incrementally to reduce memory usage
     def batch_iterator(dataset, batch_size=300000):
         for i in range(0, len(dataset), batch_size):
@@ -124,25 +125,33 @@ import math
 
 
 
-def plot_data_log_subplots(data_log, file_path):
+def plot_data_log_subplots(data_log, file_path, precDone):
     # Extract the values for each key across document counts (assuming document count is the key)
     doc_counts = sorted(data_log['entropy'].keys())  # Assuming the keys are document counts
     
     entropy = [data_log['entropy'][doc] for doc in doc_counts]
+    new_entropy = [data_log['new_entropy'][doc] for doc in doc_counts]
     num_total_ctx = [data_log['num_total_ctx'][doc] for doc in doc_counts]
     num_unique_ctx = [data_log['num_unique_ctx'][doc] for doc in doc_counts]
     
     # Create subplots (3 rows, 1 column)
     fig, axs = plt.subplots(3, 1, figsize=(10, 12))
+
+    entropy_diff = abs(new_entropy[-1] - entropy[-1])
     
     # Plot entropy
-    axs[0].plot(doc_counts, entropy, label='Entropy', marker='o')
+    axs[0].plot(doc_counts, entropy, label='Entropy Old', marker='o', color = "green")
+    axs[0].plot(doc_counts, new_entropy, label='Entropy New', marker='o', color = "blue")
     axs[0].set_xscale('log')
     axs[0].set_yscale('log')
     axs[0].set_xlabel('Number of Documents (log scale)')
     axs[0].set_ylabel('Entropy (log scale)')
-    axs[0].set_title('Entropy over Documents')
+    axs[0].set_title('Entropy over Documents(' + str(precDone) + ' % ' + 'complete)')
     axs[0].grid(True, which="both", ls="--")
+    # Add text box for entropy difference
+    textstr = f'Entropy Diff: {entropy_diff:.6f}'
+    axs[0].text(0.05, 0.95, textstr, transform=axs[0].transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
     # Plot num_total_ctx
     axs[1].plot(doc_counts, num_total_ctx, label='Total Contexts', marker='s', color='orange')
@@ -170,21 +179,30 @@ def plot_data_log_subplots(data_log, file_path):
     plt.clf()
 
 
-def plot_calc_times(data_log, file_path):
+def plot_calc_times(data_log, file_path, precDone):
     # Extract the values for each key across document counts (assuming document count is the key)
     doc_counts = sorted(data_log['entropy_calc_time'].keys())  # Assuming the keys are document counts
     
     entropy_calc_time = [data_log['entropy_calc_time'][doc] for doc in doc_counts]
     insert_calc_time = [data_log['insert_calc_time'][doc] for doc in doc_counts]
+
+    new_entropy_calc_time = [data_log['new_entropy_calc_time'][doc] for doc in doc_counts]
+    new_insert_calc_time = [data_log['new_insert_calc_time'][doc] for doc in doc_counts]
+
+
+    time_diff_entropy_calc = sum(entropy_calc_time) - sum(new_entropy_calc_time)
+    time_diff_insert_calc = sum(new_insert_calc_time) - sum(insert_calc_time)
     
     # Create a plot
     plt.figure(figsize=(10, 6))
     
     # Plot entropy_calc_time
-    plt.plot(doc_counts, entropy_calc_time, label='Entropy Calculation Time', marker='o')
+    plt.plot(doc_counts, entropy_calc_time, label='Entropy Calculation Time Old', marker='o', color = "purple")
+    plt.plot(doc_counts, new_entropy_calc_time, label='Entropy Calculation Time New', marker='o', color = "blue")
     
     # Plot insert_calc_time
-    plt.plot(doc_counts, insert_calc_time, label='Insert Calculation Time', marker='s', color='orange')
+    plt.plot(doc_counts, insert_calc_time, label='Insert Calculation Time Old', marker='s', color='orange')
+    plt.plot(doc_counts, new_insert_calc_time, label='Insert Calculation Time New', marker='s', color='yellow')
     
     # Log scale on both axes
     # plt.xscale('log')
@@ -193,10 +211,15 @@ def plot_calc_times(data_log, file_path):
     # Add labels and title
     plt.xlabel('Number of Documents (log scale)')
     plt.ylabel('Calculation Time (log scale)')
-    plt.title('Entropy Calculation Time and Insert Calculation Time over Documents')
+    plt.title('Entropy Calc Time and Insert Time over #Ctx Seen (' + str(precDone) + ' % ' + 'complete)')
+
+    # Add text box for time differences
+    textstr = f'Time Diff Entropy: {time_diff_entropy_calc:.2f}\nTime Diff Insert: {time_diff_insert_calc:.2f}\nTime Old Entropy: {sum(entropy_calc_time):.2f}\nTime Old Insert: {sum(insert_calc_time):.2f}'
+    plt.text(0.05, 0.95, textstr, transform=plt.gca().transAxes, fontsize=10, verticalalignment='top', 
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
     # Show legend
-    plt.legend()
+    plt.legend(loc='lower left')
     
     # Display grid
     plt.grid(True, which="both", ls="--")
@@ -270,8 +293,8 @@ if __name__ == "__main__":
     save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_reloadTest/graph_trees_cpp/"
     save_logs_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_reloadTest/logs_trees_cpp/"
     save_logs_filename = f"voc_{args.vocab_size}_ctxLen_{args.context_length}.pkl"
-    memap_filename = f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}.bin"
-    metadata_filename = f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}_metadata.bin"
+    memap_filename = f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}"
+    # metadata_filename = f"{save_tree_folder}voc{args.vocab_size}_ctxLen{args.context_length}_metadata.bin"
 
     if args.exp_case in already_completed_cases:
         print("This case has already been completed before without sorted list.")
@@ -309,17 +332,21 @@ if __name__ == "__main__":
         # else:
         print("Experiment is new ... ")
         up_to_ctx_count_processed = 0
-        context_tree = trie_module_memap_sorted.Trie_memap_sorted(memap_filename, metadata_filename, 10, args.context_length)
+        context_tree = trie_module_memap_sorted.Trie_memap_sorted(memap_filename, 200, args.context_length)
+        context_tree_old = trie_module_memap_sorted_old.Trie_memap_sorted_old(memap_filename + "_old.bin", memap_filename + "_metadata_old.bin", 200, args.context_length)
 
         data_log = {
             "entropy": {},
+            "new_entropy": {},
             "entropy_per_ctx_len": {},
             "num_total_ctx": {},
             "num_unique_ctx": {},
             "num_unique_ctx_len_list": {},
             "num_total_ctx_len_list": {},
             "insert_calc_time": {},
-            "entropy_calc_time": {}
+            "entropy_calc_time": {},
+            "new_insert_calc_time": {},
+            "new_entropy_calc_time": {}
         }
 
 
@@ -344,93 +371,36 @@ if __name__ == "__main__":
 
 
         # Step 5: Create the DataLoader
-        dataloader = create_dataloader(tokenized_data[0:1000], context_length, batch_size)
+        dataloader = create_dataloader(tokenized_data, context_length, batch_size)
 
 
-        start_time_insert = time.time()
-        contexts_count = 0
-        milestone_index = 0
-        # Step 6: Iterate through the DataLoader and print samples
-        for X in dataloader:
-
-            contexts_count += X.shape[0]
-
-            if contexts_count <= up_to_ctx_count_processed: 
-                del X
-                print("Context count " + str(contexts_count) + " is already processed.")
-            else:
-                # print(f"Context: {X}")
-                context_tree.insert(X)
-                # context_tree.save_metadata()
-                del X
-
-                if milestone_index < len(milestones) and contexts_count >= milestones[milestone_index]:
-                    
-                    num_ctx_seen = milestones[milestone_index]
-
-                    data_log["insert_calc_time"][contexts_count] = time.time() - start_time_insert
-                    print(f"Current Trie memory usage: {context_tree.get_memory_usage()//(1024)**3} GB")
-                    
-                    print(f"Inserting took: {data_log['insert_calc_time'][contexts_count]} seconds.")
-                    start_time_entropy = time.time()
-                    entropy_tree = context_tree.calculate_and_get_entropy()
-                    data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
-                    print(f"Entropy Calc took: {data_log['entropy_calc_time'][contexts_count]} seconds.")
-                    data_log["entropy"][contexts_count] = entropy_tree
-                    data_log["entropy_per_ctx_len"][contexts_count] = context_tree.get_entropy_per_level()
-                    data_log["num_total_ctx"][contexts_count] = context_tree.get_num_total_contexts()
-                    data_log["num_unique_ctx"][contexts_count] = context_tree.get_num_unique_contexts()
-                    data_log["num_unique_ctx_len_list"][contexts_count] = context_tree.get_num_unique_contexts_per_level()
-                    data_log["num_total_ctx_len_list"][contexts_count] = context_tree.get_num_total_contexts_per_level()
-                    start_time_insert = time.time()
-
-                    process = psutil.Process(os.getpid())
-                    print("Entropy value is: " + str(entropy_tree))
-                    print('Physical RAM Used (GB):', process.memory_info().rss/(1024**3))
-                    print('Physical RAM % Used (GB):', process.memory_percent())
-                    print('MidPeak RAM Used (GB):', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/(1024**2))
-                    print("_" * 100)
-
-
-                    plot_data_log_subplots(data_log, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}.jpg")
-                    plot_calc_times(data_log, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}.jpg")
-
-                    with open(save_logs_folder + save_logs_filename, 'wb') as pickle_file:
-                        pickle.dump(data_log, pickle_file)
-                    
-
-                    milestone_index += 1
-
-        entropy_tree = context_tree.calculate_and_get_entropy()
-        print("entropy before load is: " + str(entropy_tree))
-        context_tree.save_metadata()
-
-        del context_tree
-
-        context_tree = trie_module_memap_sorted.Trie_memap_sorted(memap_filename, metadata_filename)
-
-        entropy_tree = context_tree.calculate_and_get_entropy()
-        print("entropy after load is: " + str(entropy_tree))
-
-
+        new_insert_runtime = 0
+        old_insert_runtime = 0
         
-
-        dataloader = create_dataloader(tokenized_data[0:1000], context_length, batch_size)
-
-        start_time_insert = time.time()
         contexts_count = 0
         milestone_index = 0
         # Step 6: Iterate through the DataLoader and print samples
+        batches_seen = 0
         for X in dataloader:
 
             contexts_count += X.shape[0]
+            batches_seen += 1
 
             if contexts_count <= up_to_ctx_count_processed: 
                 del X
                 print("Context count " + str(contexts_count) + " is already processed.")
             else:
                 # print(f"Context: {X}")
+                # print("New insert ...")
+                start_time_insert = time.time()
                 context_tree.insert(X)
+                new_insert_runtime += time.time() - start_time_insert
+
+                # print("Old insert ...")
+                start_time_insert = time.time()
+                context_tree_old.insert(X)
+                old_insert_runtime += time.time() - start_time_insert 
+
                 # context_tree.save_metadata()
                 del X
 
@@ -438,15 +408,33 @@ if __name__ == "__main__":
                     
                     num_ctx_seen = milestones[milestone_index]
 
-                    data_log["insert_calc_time"][contexts_count] = time.time() - start_time_insert
+                    data_log["new_insert_calc_time"][contexts_count] = new_insert_runtime
+                    data_log["insert_calc_time"][contexts_count] = old_insert_runtime
+                    
                     print(f"Current Trie memory usage: {context_tree.get_memory_usage()//(1024)**3} GB")
                     
-                    print(f"Inserting took: {data_log['insert_calc_time'][contexts_count]} seconds.")
+                    print(f"Inserting on old trie took: {data_log['insert_calc_time'][contexts_count]} seconds.")
+                    print(f"Inserting on new trie took: {data_log['new_insert_calc_time'][contexts_count]} seconds.")
+                    print("_"*30)
                     start_time_entropy = time.time()
-                    entropy_tree = context_tree.calculate_and_get_entropy()
+                    entropy_tree = context_tree_old.calculate_and_get_entropy()
                     data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
-                    print(f"Entropy Calc took: {data_log['entropy_calc_time'][contexts_count]} seconds.")
+                    print("Entropy with traversal: " + str(entropy_tree))
+                    print("Took " + str(time.time() - start_time_entropy) + " sec.")
                     data_log["entropy"][contexts_count] = entropy_tree
+
+                    print("_"*30)
+                    start_time_entropy = time.time()
+                    entropy_tree_new = context_tree.calculate_and_get_entropy_faster()
+                    data_log["new_entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
+                    print("Entropy faster: " + str(entropy_tree_new))
+                    print("Took " + str(time.time() - start_time_entropy) + " sec.")
+                    data_log["new_entropy"][contexts_count] = entropy_tree_new
+                    print("_"*30)
+
+                    
+                    print(f"Entropy Calc took: {data_log['entropy_calc_time'][contexts_count]} seconds.")
+                    
                     data_log["entropy_per_ctx_len"][contexts_count] = context_tree.get_entropy_per_level()
                     data_log["num_total_ctx"][contexts_count] = context_tree.get_num_total_contexts()
                     data_log["num_unique_ctx"][contexts_count] = context_tree.get_num_unique_contexts()
@@ -455,29 +443,29 @@ if __name__ == "__main__":
                     start_time_insert = time.time()
 
                     process = psutil.Process(os.getpid())
-                    print("Entropy value is: " + str(entropy_tree))
+                    # print("Entropy value is: " + str(entropy_tree))
                     print('Physical RAM Used (GB):', process.memory_info().rss/(1024**3))
                     print('Physical RAM % Used (GB):', process.memory_percent())
                     print('MidPeak RAM Used (GB):', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/(1024**2))
                     print("_" * 100)
 
 
-                    plot_data_log_subplots(data_log, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}.jpg")
-                    plot_calc_times(data_log, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}.jpg")
+                    plot_data_log_subplots(data_log, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+                    plot_calc_times(data_log, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
 
                     with open(save_logs_folder + save_logs_filename, 'wb') as pickle_file:
                         pickle.dump(data_log, pickle_file)
                     
 
                     milestone_index += 1
-
-        print("Here")
-        entropy_tree = context_tree.calculate_and_get_entropy()
-        print("entropy before load is: " + str(entropy_tree))
-
-        context_tree.save_metadata()
+                    old_insert_runtime = 0
+                    new_insert_runtime = 0
+            
+                    context_tree.save_metadata()
+                    context_tree_old.save_metadata()
 
         del context_tree
+
         
     except RuntimeError as e:
         print(f"An error occurred: {e}")

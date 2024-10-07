@@ -44,7 +44,7 @@ struct TrieNode {
 };
 
 
-class Trie_memap_sorted {
+class Trie_memap_sorted_old {
 private:
     int fd;
     char* mapped_memory;
@@ -287,7 +287,7 @@ private:
 
 
 public:
-    Trie_memap_sorted(const std::string& fname, const std::string& metadata_fname, size_t initial_size_gb, int64_t context_length) : filename(fname),  metadata_filename(metadata_fname) , context_length(context_length) {
+    Trie_memap_sorted_old(const std::string& fname, const std::string& metadata_fname, size_t initial_size_gb, int64_t context_length) : filename(fname),  metadata_filename(metadata_fname) , context_length(context_length) {
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
@@ -321,7 +321,7 @@ public:
     }
 
     // Constructor to load an existing Trie from a file
-    Trie_memap_sorted(const std::string& fname, const std::string& metadata_fname) : filename(fname),  metadata_filename(metadata_fname) {
+    Trie_memap_sorted_old(const std::string& fname, const std::string& metadata_fname) : filename(fname),  metadata_filename(metadata_fname) {
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
@@ -403,7 +403,7 @@ public:
     }
 
 
-    ~Trie_memap_sorted() {
+    ~Trie_memap_sorted_old() {
         if (mapped_memory != MAP_FAILED) {
             munmap(mapped_memory, allocated_size);
         }
@@ -593,25 +593,25 @@ py::dict convert_to_python_dict(const std::unordered_map<std::vector<int64_t>, i
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    py::class_<Trie_memap_sorted>(m, "Trie_memap_sorted")
+    py::class_<Trie_memap_sorted_old>(m, "Trie_memap_sorted_old")
         .def(py::init<const std::string&, const std::string&, size_t, int64_t>())
         .def(py::init<const std::string&, const std::string&>())
-        .def("insert", &Trie_memap_sorted::insert)
-        .def("collect_all_sequences", [](Trie_memap_sorted& trie) {
+        .def("insert", &Trie_memap_sorted_old::insert)
+        .def("collect_all_sequences", [](Trie_memap_sorted_old& trie) {
             auto sequences = trie.collect_all_sequences();
             return convert_to_python_dict(sequences);
         })
-        .def("calculate_and_get_entropy", &Trie_memap_sorted::calculate_and_get_entropy)
-        .def("get_memory_usage", &Trie_memap_sorted::get_memory_usage)
-        .def("get_allocated_size", &Trie_memap_sorted::get_allocated_size)
-        .def("get_num_unique_contexts", &Trie_memap_sorted::get_num_unique_contexts)  // New method to access num_unique_contexts
-        .def("get_num_total_contexts", &Trie_memap_sorted::get_num_total_contexts)  // New method to access num_unique_contexts
-        .def("get_children_distribution", &Trie_memap_sorted::get_children_distribution)
-        .def("get_node_count", &Trie_memap_sorted::get_node_count)
-        .def("get_node_level", &Trie_memap_sorted::get_node_level)
-        .def("get_num_unique_contexts_per_level", &Trie_memap_sorted::get_num_unique_contexts_per_level)
-        .def("get_num_total_contexts_per_level", &Trie_memap_sorted::get_num_total_contexts_per_level)
-        .def("get_entropy_per_level", &Trie_memap_sorted::get_entropy_per_level)
-        .def("load_metadata", &Trie_memap_sorted::load_metadata)
-        .def("save_metadata", &Trie_memap_sorted::save_metadata);
+        .def("calculate_and_get_entropy", &Trie_memap_sorted_old::calculate_and_get_entropy)
+        .def("get_memory_usage", &Trie_memap_sorted_old::get_memory_usage)
+        .def("get_allocated_size", &Trie_memap_sorted_old::get_allocated_size)
+        .def("get_num_unique_contexts", &Trie_memap_sorted_old::get_num_unique_contexts)  // New method to access num_unique_contexts
+        .def("get_num_total_contexts", &Trie_memap_sorted_old::get_num_total_contexts)  // New method to access num_unique_contexts
+        .def("get_children_distribution", &Trie_memap_sorted_old::get_children_distribution)
+        .def("get_node_count", &Trie_memap_sorted_old::get_node_count)
+        .def("get_node_level", &Trie_memap_sorted_old::get_node_level)
+        .def("get_num_unique_contexts_per_level", &Trie_memap_sorted_old::get_num_unique_contexts_per_level)
+        .def("get_num_total_contexts_per_level", &Trie_memap_sorted_old::get_num_total_contexts_per_level)
+        .def("get_entropy_per_level", &Trie_memap_sorted_old::get_entropy_per_level)
+        .def("load_metadata", &Trie_memap_sorted_old::load_metadata)
+        .def("save_metadata", &Trie_memap_sorted_old::save_metadata);
 }
