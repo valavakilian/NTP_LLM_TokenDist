@@ -159,13 +159,12 @@ private:
     std::map<int64_t, double> entropy_per_level;
 
     const size_t array_size = 1000000000; // Size of the array
-    MemMapArray<double> countLog_array;
-    MemMapArray<int> ctxLen_array;
-    MemMapArray<int> ctxCount_array;
+    std::vector<double> countLog_array;
+    std::vector<int64_t> ctxLen_array;
+    std::vector<int64_t> ctxCount_array;
 
     const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
-
 
     TrieNode* get_node(size_t offset) {
         if (offset >= file_size) {
@@ -347,9 +346,8 @@ private:
 
 public:
     Trie_memap_sorted(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
-    : filename(fname + ".bin"), context_length(context_length), countLog_array(fname + "_countLog_arr.dat", array_size), 
-    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size),
-    logcalc_memory(size_logcalc_memory, -1) {
+    : filename(fname + ".bin"), context_length(context_length), countLog_array(array_size, 0),  
+    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1) {
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
@@ -394,8 +392,8 @@ public:
 
     // Constructor to load an existing Trie from a file
     Trie_memap_sorted(const std::string& fname) : 
-    filename(fname + ".bin"), countLog_array(fname + "_countLog_arr.dat"), ctxLen_array(fname + "_ctxLen_arr.dat"), 
-    ctxCount_array(fname + "_ctxCount_arr.dat"), logcalc_memory(size_logcalc_memory, -1) {
+    filename(fname + ".bin"), countLog_array(array_size, 0), ctxLen_array(array_size, 0), ctxCount_array(array_size, 0),
+     logcalc_memory(size_logcalc_memory, -1) {
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {

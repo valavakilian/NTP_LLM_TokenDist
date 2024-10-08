@@ -13,6 +13,12 @@
 #include <cstring>
 #include <cmath>
 #include <map>
+#include <string>
+#include <stdexcept>
+#include <iostream>
+#include <sys/mman.h>
+#include <algorithm>
+#include <unistd.h> // for sleep()
 // #include <nlohmann/json.hpp>  // Include a JSON library like nlohmann/json for C++
 
 namespace py = pybind11;
@@ -60,6 +66,9 @@ private:
     std::map<int64_t, int> num_total_contexts_per_level;
 
     std::map<int64_t, double> entropy_per_level;
+
+    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
+    std::vector<double> logcalc_memory;
 
     TrieNode* get_node(size_t offset) {
         if (offset >= file_size) {
@@ -159,54 +168,6 @@ private:
     }
 
 
-    // double calculate_and_sum_entropy(size_t node_offset) {
-    //     TrieNode* node = get_node(node_offset);
-    //     std::pair<int64_t, int64_t>* children = get_children(node);
-        
-    //     double Pi_j = static_cast<double>(node->count) / num_total_contexts;
-        
-        
-    //     double context_entropy = 0.0;
-    //     int64_t context_total = 0;
-
-    //     if (node->num_children > 0){
-    //         num_unique_contexts++;  // Increment node count when allocating a new node
-    //         num_unique_contexts_per_level[node->node_level]++;
-    //     }
-
-    //     // Calculate total count for this context
-    //     for (int64_t i = 0; i < node->num_children; ++i) {
-    //         TrieNode* child = get_node(children[i].second);
-    //         context_total += child->count;
-    //     }
-
-    //     // Calculate entropy for this context
-    //     if (context_total > 0) {
-    //         for (int64_t i = 0; i < node->num_children; ++i) {
-    //             TrieNode* child = get_node(children[i].second);
-    //             double p_t = static_cast<double>(child->count) / context_total;
-    //             if (p_t > 0) {
-    //                 context_entropy -= p_t * log(p_t);
-    //             }
-    //         }
-    //     }
-
-    //     double node_contribution = Pi_j * context_entropy;
-    //     if (node->num_children > 0){
-    //         double Pi_j_level = static_cast<double>(node->count) / num_total_contexts_per_level[node -> node_level];
-    //         entropy_per_level[node -> node_level] += Pi_j_level * context_entropy;
-    //     }
-
-    //     // Recursively calculate entropy for all children
-    //     double children_entropy = 0.0;
-    //     for (int64_t i = 0; i < node->num_children; ++i) {
-    //         children_entropy += calculate_and_sum_entropy(children[i].second);
-    //     }
-
-    //     return node_contribution + children_entropy;
-    // }
-
-
     double calculate_and_sum_entropy(size_t root_offset) {
         auto start_time = std::chrono::steady_clock::now();
         const auto timeout_duration = std::chrono::seconds(5000);
@@ -261,6 +222,70 @@ private:
 
         return total_entropy;
     }
+
+
+    double calculate_and_sum_entropy_withMem(size_t root_offset) {
+        auto start_time = std::chrono::steady_clock::now();
+        const auto timeout_duration = std::chrono::seconds(5000);
+        double total_entropy = 0.0;
+        std::stack<size_t> node_stack;
+        node_stack.push(root_offset);
+        DEBUG_PRINT("F1");
+
+        while (!node_stack.empty()) {
+            if (std::chrono::steady_clock::now() - start_time > timeout_duration) {
+                std::cout << "Entropy calculation timed out after 5000 seconds. Returning default value." << std::endl;
+                return 100.0;
+            }
+            
+            
+            size_t current_offset = node_stack.top();
+            node_stack.pop();
+
+            TrieNode* node = get_node(current_offset);
+            std::pair<int64_t, int64_t>* children = get_children(node);
+            
+            // double Pi_j = static_cast<double>(node->count) / num_total_contexts;
+            double context_entropy = 0.0;
+            int64_t context_total = 0;
+            DEBUG_PRINT("F2");
+
+            if (node->node_level <= context_length) {
+                for (int64_t i = 0; i < node->num_children; ++i) {
+                    DEBUG_PRINT("F3");
+                    TrieNode* child = get_node(children[i].second);
+                    if (child->count > 1){
+                      if(logcalc_memory[child->count] != -1) {
+                        context_entropy += logcalc_memory[child->count];
+                      }else{
+                        logcalc_memory[child->count] = child->count * std::log(child->count);
+                        context_entropy += logcalc_memory[child->count];
+                      }
+                    } 
+                    context_total += child->count;
+                }
+                if(logcalc_memory[context_total] != -1) {
+                    context_entropy -= logcalc_memory[context_total];
+                }else{
+                    logcalc_memory[context_total] = context_total * std::log(context_total);
+                    context_entropy -= logcalc_memory[context_total];
+                }
+
+                DEBUG_PRINT("F4");
+                double node_contribution = context_entropy / num_total_contexts;
+                total_entropy += node_contribution;
+
+                num_unique_contexts++;
+                num_unique_contexts_per_level[node->node_level]++;
+                entropy_per_level[node->node_level] += node_contribution;
+
+                for (int64_t i = 0; i < node->num_children; ++i) {
+                    node_stack.push(children[i].second);
+                }
+            }
+        }
+        return total_entropy;
+    }
     
 
     size_t find_node(const std::vector<int64_t>& sequence) {
@@ -287,25 +312,27 @@ private:
 
 
 public:
-    Trie_memap_sorted_old(const std::string& fname, const std::string& metadata_fname, size_t initial_size_gb, int64_t context_length) : filename(fname),  metadata_filename(metadata_fname) , context_length(context_length) {
+    Trie_memap_sorted_old(const std::string& fname, const std::string& metadata_fname, size_t initial_size_gb, int64_t context_length) :
+    filename(fname),  metadata_filename(metadata_fname) , context_length(context_length), logcalc_memory(size_logcalc_memory, -1) {
+        DEBUG_PRINT("F1");
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
             throw std::runtime_error("Failed to open file for memory mapping");
         }
-
+        DEBUG_PRINT("F2");
         // Set the file size to the allocated size
         if (ftruncate(fd, allocated_size) == -1) {
             close(fd);
             throw std::runtime_error("Failed to set initial file size");
         }
-
+        DEBUG_PRINT("F3");
         mapped_memory = static_cast<char*>(mmap(NULL, allocated_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
         if (mapped_memory == MAP_FAILED) {
             close(fd);
             throw std::runtime_error("Failed to map file to memory");
         }
-
+        DEBUG_PRINT("F4");
         // Initialize the root node
         file_size = sizeof(TrieNode);
         TrieNode* root = get_node(0);
@@ -321,7 +348,8 @@ public:
     }
 
     // Constructor to load an existing Trie from a file
-    Trie_memap_sorted_old(const std::string& fname, const std::string& metadata_fname) : filename(fname),  metadata_filename(metadata_fname) {
+    Trie_memap_sorted_old(const std::string& fname, const std::string& metadata_fname) :
+    filename(fname),  metadata_filename(metadata_fname), logcalc_memory(size_logcalc_memory, -1)  {
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
@@ -507,6 +535,25 @@ public:
         return total_entropy ;  // Normalize by total number of nodes
     }
 
+
+    double calculate_and_get_entropy_withMem() {
+        num_unique_contexts = 0;
+        for (auto& pair : num_unique_contexts_per_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+        for (auto& pair : entropy_per_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+
+        // num_total_contexts = 0;
+        double total_entropy = calculate_and_sum_entropy_withMem(0);  // Start from the root
+        num_unique_contexts -= 1; // Remove the count for the root node
+
+        DEBUG_PRINT("Count for the zeroths node " << get_node(0)->count);
+        
+        return total_entropy ;  // Normalize by total number of nodes
+    }
+
     int64_t get_num_unique_contexts() const {
         return num_unique_contexts.load();
     }
@@ -602,6 +649,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             return convert_to_python_dict(sequences);
         })
         .def("calculate_and_get_entropy", &Trie_memap_sorted_old::calculate_and_get_entropy)
+        .def("calculate_and_get_entropy_withMem", &Trie_memap_sorted_old::calculate_and_get_entropy_withMem)
         .def("get_memory_usage", &Trie_memap_sorted_old::get_memory_usage)
         .def("get_allocated_size", &Trie_memap_sorted_old::get_allocated_size)
         .def("get_num_unique_contexts", &Trie_memap_sorted_old::get_num_unique_contexts)  // New method to access num_unique_contexts
