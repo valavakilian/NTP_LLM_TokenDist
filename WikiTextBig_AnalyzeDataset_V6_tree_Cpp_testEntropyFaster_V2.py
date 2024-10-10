@@ -139,6 +139,7 @@ def plot_data_log_subplots(data_log, file_path, precDone):
     fig, axs = plt.subplots(3, 1, figsize=(10, 12))
 
     entropy_diff = abs(new_entropy[-1] - entropy[-1])
+    entropy_mem_diff = abs(entropy_withMem[-1] - entropy[-1])
     
     # Plot entropy
     axs[0].plot(doc_counts, entropy, label='Entropy Old', marker='o', color = "green")
@@ -151,7 +152,7 @@ def plot_data_log_subplots(data_log, file_path, precDone):
     axs[0].set_title('Entropy over Documents(' + str(precDone) + ' % ' + 'complete)')
     axs[0].grid(True, which="both", ls="--")
     # Add text box for entropy difference
-    textstr = f'Entropy Diff: {entropy_diff:.6f}'
+    textstr = f'Entropy Diff: {entropy_diff:.6f}\nEntropy Mem Diff: {entropy_mem_diff:.6f}'
     axs[0].text(0.05, 0.95, textstr, transform=axs[0].transAxes, fontsize=10, verticalalignment='top',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
@@ -194,6 +195,7 @@ def plot_calc_times(data_log, file_path, precDone):
 
 
     time_diff_entropy_calc = sum(entropy_calc_time) - sum(new_entropy_calc_time)
+    time_diff_mem_entropy_calc = sum(entropy_calc_time) - sum(entropy_calc_time_withMem)
     time_diff_insert_calc = sum(new_insert_calc_time) - sum(insert_calc_time)
     
     # Create a plot
@@ -218,7 +220,7 @@ def plot_calc_times(data_log, file_path, precDone):
     plt.title('Entropy Calc Time and Insert Time over #Ctx Seen (' + str(precDone) + ' % ' + 'complete)')
 
     # Add text box for time differences
-    textstr = f'Time Diff Entropy: {time_diff_entropy_calc:.2f}\nTime Diff Insert: {time_diff_insert_calc:.2f}\nTime Old Entropy: {sum(entropy_calc_time):.2f}\nTime Old Insert: {sum(insert_calc_time):.2f}'
+    textstr = f'Time Diff Entropy: {time_diff_entropy_calc:.2f}\nTime Mem Diff Entropy: {time_diff_mem_entropy_calc:.2f}\nTime Diff Insert: {time_diff_insert_calc:.2f}\nTime Old Entropy: {sum(entropy_calc_time):.2f}\nTime Old Insert: {sum(insert_calc_time):.2f}'
     plt.text(0.05, 0.95, textstr, transform=plt.gca().transAxes, fontsize=10, verticalalignment='top', 
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
@@ -387,10 +389,13 @@ if __name__ == "__main__":
         milestone_index = 0
         # Step 6: Iterate through the DataLoader and print samples
         batches_seen = 0
+        num_datapoints_added = 0
         for X in dataloader:
 
             contexts_count += X.shape[0]
             batches_seen += 1
+
+            num_datapoints_added += X.shape[0]
 
             if contexts_count <= up_to_ctx_count_processed: 
                 del X
@@ -398,9 +403,11 @@ if __name__ == "__main__":
             else:
                 # print(f"Context: {X}")
                 # print("New insert ...")
-                start_time_insert = time.time()
-                context_tree.insert(X)
-                new_insert_runtime += time.time() - start_time_insert
+                # start_time_insert = time.time()
+                # context_tree.insert(X)
+                # new_insert_runtime += time.time() - start_time_insert
+                context_tree.insert(X[0:2,:])
+                input("Inserted One Context")
 
                 # print("Old insert ...")
                 start_time_insert = time.time()
@@ -416,6 +423,9 @@ if __name__ == "__main__":
 
                     data_log["new_insert_calc_time"][contexts_count] = new_insert_runtime
                     data_log["insert_calc_time"][contexts_count] = old_insert_runtime
+
+                    print("_"*50)
+                    print("num_datapoints_added: " + str(num_datapoints_added))
                     
                     print(f"Current Trie memory usage: {context_tree.get_memory_usage()//(1024)**3} GB")
                     
@@ -423,7 +433,11 @@ if __name__ == "__main__":
                     print(f"Inserting on new trie took: {data_log['new_insert_calc_time'][contexts_count]} seconds.")
                     print("_"*30)
                     start_time_entropy = time.time()
-                    entropy_tree = context_tree_old.calculate_and_get_entropy()
+                    try:
+                        entropy_tree = context_tree_old.calculate_and_get_entropy()
+                    except RuntimeError as e:
+                        print(f"An error occurred: {e}")
+                        entropy_tree = data_log["entropy"][contexts_count][-1]
                     data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
                     print("Entropy with traversal: " + str(entropy_tree))
                     print("Took " + str(time.time() - start_time_entropy) + " sec.")
@@ -432,7 +446,11 @@ if __name__ == "__main__":
 
                     print("_"*30)
                     start_time_entropy = time.time()
-                    entropy_tree = context_tree_old.calculate_and_get_entropy_withMem()
+                    try:
+                        entropy_tree = context_tree_old.calculate_and_get_entropy_withMem()
+                    except RuntimeError as e:
+                        print(f"An error occurred: {e}")
+                        entropy_tree = data_log["entropy_withMem"][contexts_count][-1]
                     data_log["entropy_calc_time_withMem"][contexts_count] = time.time() - start_time_entropy
                     print("Entropy with traversal withMem: " + str(entropy_tree))
                     print("Took " + str(time.time() - start_time_entropy) + " sec.")
@@ -450,6 +468,8 @@ if __name__ == "__main__":
 
                     
                     print(f"Entropy Calc took: {data_log['entropy_calc_time'][contexts_count]} seconds.")
+
+                    num_datapoints_added = 0
                     
                     data_log["entropy_per_ctx_len"][contexts_count] = context_tree.get_entropy_per_level()
                     data_log["num_total_ctx"][contexts_count] = context_tree.get_num_total_contexts()

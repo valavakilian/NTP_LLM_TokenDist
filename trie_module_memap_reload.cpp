@@ -230,12 +230,13 @@ private:
         double total_entropy = 0.0;
         std::stack<size_t> node_stack;
         node_stack.push(root_offset);
-        DEBUG_PRINT("F1");
+        // DEBUG_PRINT("F1");
 
         while (!node_stack.empty()) {
             if (std::chrono::steady_clock::now() - start_time > timeout_duration) {
+                throw std::runtime_error("Entropy calculation timed out after 5000 seconds. Returning default value.");
                 std::cout << "Entropy calculation timed out after 5000 seconds. Returning default value." << std::endl;
-                return 100.0;
+                return -1;
             }
             
             
@@ -248,11 +249,16 @@ private:
             // double Pi_j = static_cast<double>(node->count) / num_total_contexts;
             double context_entropy = 0.0;
             int64_t context_total = 0;
-            DEBUG_PRINT("F2");
+            // DEBUG_PRINT("F2");
 
-            if (node->node_level <= context_length) {
+            for (int64_t i = 0; i < node->num_children; ++i) {
+                TrieNode* child = get_node(children[i].second);
+                context_total += child->count;
+            }
+
+            if (context_total > 0) {
                 for (int64_t i = 0; i < node->num_children; ++i) {
-                    DEBUG_PRINT("F3");
+                    // DEBUG_PRINT("F3");
                     TrieNode* child = get_node(children[i].second);
                     if (child->count > 1){
                       if(logcalc_memory[child->count] != -1) {
@@ -262,7 +268,7 @@ private:
                         context_entropy += logcalc_memory[child->count];
                       }
                     } 
-                    context_total += child->count;
+                    // context_total += child->count;
                 }
                 if(logcalc_memory[context_total] != -1) {
                     context_entropy -= logcalc_memory[context_total];
@@ -271,7 +277,7 @@ private:
                     context_entropy -= logcalc_memory[context_total];
                 }
 
-                DEBUG_PRINT("F4");
+                // DEBUG_PRINT("F4");
                 double node_contribution = context_entropy / num_total_contexts;
                 total_entropy += node_contribution;
 
@@ -284,7 +290,7 @@ private:
                 }
             }
         }
-        return total_entropy;
+        return -total_entropy;
     }
     
 
@@ -343,6 +349,8 @@ public:
 
         num_unique_contexts = 0;  // Count the root node
         num_total_contexts = 0;
+
+        DEBUG_PRINT("F5");
 
         DEBUG_PRINT("Trie initialized with allocated size: " << allocated_size << " bytes");
     }

@@ -131,11 +131,21 @@ struct TrieNode {
     int64_t count;
     int64_t num_children;
     int64_t children_offset;  // Offset to children in the memory-mapped file
-    double entropy;  // New field to store entropy
     bool is_root;  // New field to indicate if this is the root node
     int64_t node_level;
     int64_t node_index;
 };
+
+
+void printTrieNode(const TrieNode* node) {
+    std::cout << "TrieNode Information:" << std::endl;
+    std::cout << "Count: " << node->count << std::endl;
+    std::cout << "Number of Children: " << node->num_children << std::endl;
+    std::cout << "Children Offset: " << node->children_offset << std::endl;
+    std::cout << "Is Root: " << (node->is_root ? "True" : "False") << std::endl;
+    std::cout << "Node Level: " << node->node_level << std::endl;
+    std::cout << "Node Index: " << node->node_index << std::endl;
+}
 
 
 class Trie_memap_sorted {
@@ -157,11 +167,14 @@ private:
     std::map<int64_t, int> num_total_contexts_per_level;
 
     std::map<int64_t, double> entropy_per_level;
-
+                               
     const size_t array_size = 1000000000; // Size of the array
-    std::vector<double> countLog_array;
-    std::vector<int64_t> ctxLen_array;
-    std::vector<int64_t> ctxCount_array;
+    // std::vector<double> countLog_array;
+    // std::vector<int64_t> ctxLen_array;
+    // std::vector<int64_t> ctxCount_array;
+    MemMapArray<double> countLog_array;
+    MemMapArray<int> ctxLen_array;
+    MemMapArray<int> ctxCount_array;
 
     const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
@@ -274,8 +287,9 @@ private:
 
         while (!node_stack.empty()) {
             if (std::chrono::steady_clock::now() - start_time > timeout_duration) {
+                throw std::runtime_error("Entropy calculation timed out after 5000 seconds. Returning default value.");
                 std::cout << "Entropy calculation timed out after 5000 seconds. Returning default value." << std::endl;
-                return 100.0;
+                return -1;
             }
 
             size_t current_offset = node_stack.top();
@@ -346,25 +360,29 @@ private:
 
 public:
     Trie_memap_sorted(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
-    : filename(fname + ".bin"), context_length(context_length), countLog_array(array_size, 0),  
-    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1) {
+    : filename(fname + ".bin"), context_length(context_length), countLog_array(fname + "_countLog_arr.dat", array_size), 
+    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size), logcalc_memory(size_logcalc_memory, -1) {
+        // DEBUG_PRINT("F1");
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
             throw std::runtime_error("Failed to open file for memory mapping");
         }
+        // DEBUG_PRINT("F2");
 
         // Set the file size to the allocated size
         if (ftruncate(fd, allocated_size) == -1) {
             close(fd);
             throw std::runtime_error("Failed to set initial file size");
         }
+        // DEBUG_PRINT("F3");
 
         mapped_memory = static_cast<char*>(mmap(NULL, allocated_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
         if (mapped_memory == MAP_FAILED) {
             close(fd);
             throw std::runtime_error("Failed to map file to memory");
         }
+        // DEBUG_PRINT("F4");
 
         metadata_filename = filename + "_metadata.bin";
         // countLog_array_filename = filename + "_countLog_arr.dat";
@@ -392,8 +410,8 @@ public:
 
     // Constructor to load an existing Trie from a file
     Trie_memap_sorted(const std::string& fname) : 
-    filename(fname + ".bin"), countLog_array(array_size, 0), ctxLen_array(array_size, 0), ctxCount_array(array_size, 0),
-     logcalc_memory(size_logcalc_memory, -1) {
+    filename(fname + ".bin"), countLog_array(fname + "_countLog_arr.dat", array_size), 
+    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size), logcalc_memory(size_logcalc_memory, -1) {
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
@@ -513,6 +531,11 @@ public:
                 int64_t value = accessor[i][j];
                 TrieNode* current = get_node(current_offset);
 
+                DEBUG_PRINT("_____________________________________________________________________________________________");
+                sleep(1);
+                DEBUG_PRINT("j: " << j);
+                
+
                 if (j > 0) {
                     num_total_contexts += 1;
                 }
@@ -545,25 +568,47 @@ public:
                                     current->num_children * sizeof(std::pair<int64_t, int64_t>));
                         current->children_offset = new_children_offset;
                     }
-
+                    
                     insert_child(current, value, new_node_offset);
                     current_offset = new_node_offset;
                 } else {
                     current_offset = get_children(current)[child_index].second;
                 }
 
+
+                DEBUG_PRINT("*******");
+                printTrieNode(current);
+
                 c_t_temp = get_node(current_offset)->count;
+                DEBUG_PRINT("*******");
+                DEBUG_PRINT("c_t_temp " << c_t_temp);
+                DEBUG_PRINT("current->node_index " << current->node_index);
+                DEBUG_PRINT("*******");
+                printTrieNode(get_node(current_offset));
+                DEBUG_PRINT("*******");
                 // update_countLog_temp = pow(c_t_temp + 1, c_t_temp + 1)/pow(c_t_temp, c_t_temp);
                 
                 // DEBUG_PRINT("c_t_temp: " << c_t_temp);
                 // DEBUG_PRINT("update_countLog_temp: " << update_countLog_temp);
                 
-                if (current->node_index != -1 && c_t_temp != 0){
+                if (current->node_index > 0 && c_t_temp > 0 && current->node_level <= 32){
                     if(logcalc_memory[c_t_temp] == -1){
                         logcalc_memory[c_t_temp] = (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp);
                         // DEBUG_PRINT("logcalc_memory for " << c_t_temp << " is " << logcalc_memory[c_t_temp]);
                         // sleep(1); 
+
+                        if (logcalc_memory[c_t_temp] / num_total_contexts >= 20){
+                            DEBUG_PRINT("_____________________________________________________________________________________________");
+                            DEBUG_PRINT("At node " << c_t_temp << " the entropy contribution is " << logcalc_memory[c_t_temp] << " which is too high !");
+                            DEBUG_PRINT("num_total_contexts " << num_total_contexts);
+                            DEBUG_PRINT("node_counter " << node_counter);
+                            printTrieNode(current);
+                        }
                     }
+                    
+                    DEBUG_PRINT("For this node, we calculated the entropy ...");
+                    DEBUG_PRINT("_____________________________________________________________________________________________");
+
                     //     countLog_array[current->node_index] += logcalc_memory[c_t_temp];
                     // } else {
                     //     countLog_array[current->node_index] += logcalc_memory[c_t_temp];
@@ -581,10 +626,7 @@ public:
             }
         }
 
-        
-        
 
-        // update_critical_info();
     }
 
 
@@ -640,10 +682,14 @@ public:
         int counter = 0;
         for(int j = 1; j < node_counter; j++){
             entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
-
-            // DEBUG_PRINT("ctxCount_array[j] " << ctxCount_array[j]);
-            // DEBUG_PRINT("countLog_array[j] " << countLog_array[j]);
-            // DEBUG_PRINT("entropy_temp " << entropy_temp);
+            
+            if (entropy_temp / num_total_contexts > 20){
+                DEBUG_PRINT("_____________________________________________________________________________________________");
+                DEBUG_PRINT("At node " << j << " the entropy contribution is " << entropy_temp << " which is too high !");
+                DEBUG_PRINT("node_counter " << ctxCount_array[j]);
+                DEBUG_PRINT("_____________________________________________________________________________________________");
+            }
+            
             if (ctxCount_array[j] == 0){
                 counter += 1;
                 if (counter == 100){
@@ -658,6 +704,21 @@ public:
 
             total_counter += ctxCount_array[j];
         }
+
+        if (total_counter !=  num_total_contexts){
+            DEBUG_PRINT("_____________________________________________________________________________________________");
+            DEBUG_PRINT("total_counter = " << total_counter);
+            DEBUG_PRINT("num_total_contexts = " << num_total_contexts);
+            DEBUG_PRINT("Not Equal, This is BAD! ");
+            DEBUG_PRINT("Checking for node counter array being referenced correctly... ");
+            DEBUG_PRINT("node_counter = " << node_counter);
+            DEBUG_PRINT("ctxCount_array[node_counter-1] = " << ctxCount_array[node_counter-1]);
+            DEBUG_PRINT("ctxCount_array[node_counter] = " << ctxCount_array[node_counter]);
+            DEBUG_PRINT("ctxCount_array[node_counter + 1] = " << ctxCount_array[node_counter + 1]);
+            DEBUG_PRINT("_____________________________________________________________________________________________");
+        }
+        
+        
         total_entropy = -total_entropy / total_counter;
         for(int t = 0; t < context_length; t++){
             entropy_per_level[t] /= -total_counter;
