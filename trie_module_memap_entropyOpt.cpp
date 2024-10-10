@@ -168,7 +168,7 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
                                
-    const size_t array_size = 1000000000; // Size of the array
+    const size_t array_size = 100000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int64_t> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -176,7 +176,7 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
 
-    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 100000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
 
     TrieNode* get_node(size_t offset) {
@@ -531,9 +531,9 @@ public:
                 int64_t value = accessor[i][j];
                 TrieNode* current = get_node(current_offset);
 
-                DEBUG_PRINT("_____________________________________________________________________________________________");
-                sleep(1);
-                DEBUG_PRINT("j: " << j);
+                // DEBUG_PRINT("_____________________________________________________________________________________________");
+                // sleep(1);
+                // DEBUG_PRINT("j: " << j);
                 
 
                 if (j > 0) {
@@ -576,16 +576,16 @@ public:
                 }
 
 
-                DEBUG_PRINT("*******");
-                printTrieNode(current);
+                // DEBUG_PRINT("*******");
+                // printTrieNode(current);
 
                 c_t_temp = get_node(current_offset)->count;
-                DEBUG_PRINT("*******");
-                DEBUG_PRINT("c_t_temp " << c_t_temp);
-                DEBUG_PRINT("current->node_index " << current->node_index);
-                DEBUG_PRINT("*******");
-                printTrieNode(get_node(current_offset));
-                DEBUG_PRINT("*******");
+                // DEBUG_PRINT("*******");
+                // DEBUG_PRINT("c_t_temp " << c_t_temp);
+                // DEBUG_PRINT("current->node_index " << current->node_index);
+                // DEBUG_PRINT("*******");
+                // printTrieNode(get_node(current_offset));
+                // DEBUG_PRINT("*******");
                 // update_countLog_temp = pow(c_t_temp + 1, c_t_temp + 1)/pow(c_t_temp, c_t_temp);
                 
                 // DEBUG_PRINT("c_t_temp: " << c_t_temp);
@@ -597,17 +597,17 @@ public:
                         // DEBUG_PRINT("logcalc_memory for " << c_t_temp << " is " << logcalc_memory[c_t_temp]);
                         // sleep(1); 
 
-                        if (logcalc_memory[c_t_temp] / num_total_contexts >= 20){
-                            DEBUG_PRINT("_____________________________________________________________________________________________");
-                            DEBUG_PRINT("At node " << c_t_temp << " the entropy contribution is " << logcalc_memory[c_t_temp] << " which is too high !");
-                            DEBUG_PRINT("num_total_contexts " << num_total_contexts);
-                            DEBUG_PRINT("node_counter " << node_counter);
-                            printTrieNode(current);
-                        }
+                        // if (logcalc_memory[c_t_temp] / num_total_contexts >= 20){
+                        //     DEBUG_PRINT("_____________________________________________________________________________________________");
+                        //     DEBUG_PRINT("At node " << c_t_temp << " the entropy contribution is " << logcalc_memory[c_t_temp] << " which is too high !");
+                        //     DEBUG_PRINT("num_total_contexts " << num_total_contexts);
+                        //     DEBUG_PRINT("node_counter " << node_counter);
+                        //     printTrieNode(current);
+                        // }
                     }
                     
-                    DEBUG_PRINT("For this node, we calculated the entropy ...");
-                    DEBUG_PRINT("_____________________________________________________________________________________________");
+                    // DEBUG_PRINT("For this node, we calculated the entropy ...");
+                    // DEBUG_PRINT("_____________________________________________________________________________________________");
 
                     //     countLog_array[current->node_index] += logcalc_memory[c_t_temp];
                     // } else {
@@ -839,16 +839,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("calculate_and_get_entropy_faster", &Trie_memap_sorted::calculate_and_get_entropy_faster)
         .def("load_metadata", &Trie_memap_sorted::load_metadata)
         .def("save_metadata", &Trie_memap_sorted::save_metadata);
-
-
-    py::class_<MemMapArray<int64_t>>(m, "MemMapArrayInt")
-        .def(py::init<const std::string&, size_t>())
-        .def("get_size", &MemMapArray<int64_t>::getSize)
-        .def("__getitem__", [](MemMapArray<int64_t> &self, size_t index) { return self[index]; });
-    
-    py::class_<MemMapArray<double>>(m, "MemMapArrayDouble")
-        .def(py::init<const std::string&, size_t>())
-        .def("get_size", &MemMapArray<double>::getSize)
-        .def("__getitem__", [](MemMapArray<double> &self, size_t index) { return self[index]; });
 
 }
