@@ -134,6 +134,7 @@ struct TrieNode {
     bool is_root;  // New field to indicate if this is the root node
     int64_t node_level;
     int64_t node_index;
+    std::mutex node_mutex;  // Mutex for this node
 };
 
 
@@ -168,7 +169,7 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
                                
-    const size_t array_size = 100000000; // Size of the array
+    const size_t array_size = 1000000; // Size of the array
     std::vector<double> countLog_array;
     std::vector<int> ctxLen_array;
     std::vector<int64_t> ctxCount_array;
@@ -176,8 +177,13 @@ private:
     // MemMapArray<int> ctxLen_array;
     // MemMapArray<int> ctxCount_array;
 
-    const size_t size_logcalc_memory = 100000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 1000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
+
+    std::mutex alloc_memory_mutex;
+    std::mutex alloc_node_mutex;
+
+    std::vector<std::mutex> mutex_array_lock;  // Array of mutexes
 
     TrieNode* get_node(size_t offset) {
         if (offset >= file_size) {
@@ -196,6 +202,7 @@ private:
 
     // Modify the allocate_space function to periodically update critical info
     size_t allocate_space(size_t size) {
+        
         size_t offset = file_size;
         file_size += size;
         if (file_size > allocated_size) {
@@ -206,10 +213,16 @@ private:
     }
 
     size_t allocate_node(int64_t parent_level) {
+        DEBUG_PRINT("Locking alloc_memory_mutex");
+        alloc_memory_mutex.lock();
         size_t offset = allocate_space(sizeof(TrieNode));
+        alloc_memory_mutex.unlock();
+        DEBUG_PRINT("Unlocking alloc_memory_mutex");
         TrieNode* new_node = get_node(offset);
         new_node->node_level = parent_level + 1; 
 
+        DEBUG_PRINT("Locking alloc_node_mutex");
+        alloc_node_mutex.lock();
         if (new_node->node_level <= context_length){
             new_node->node_index = node_counter;
             ctxLen_array[new_node->node_index] = new_node->node_level;
@@ -217,6 +230,8 @@ private:
         } else {
             new_node->node_index = -1;
         }
+        alloc_node_mutex.unlock();
+        DEBUG_PRINT("Unlocking alloc_node_mutex");
         return offset;
     }
 
@@ -360,7 +375,8 @@ private:
 public:
     Trie_memap_sorted_OptExp(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
     : filename(fname + ".bin"), context_length(context_length), countLog_array(array_size, 0), 
-    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1) {
+    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1)
+    , mutex_array_lock(array_size) {
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
@@ -401,7 +417,8 @@ public:
     // Constructor to load an existing Trie from a file
     Trie_memap_sorted_OptExp(const std::string& fname) : 
     filename(fname + ".bin"), countLog_array(array_size, 0), 
-    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1) {
+    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1)
+    , mutex_array_lock(array_size){
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
@@ -500,81 +517,129 @@ public:
         std::cout << "Destroyed the trie."<< std::endl;
     }
 
-    void insert(torch::Tensor tensor) {
+    void insert_context(const torch::Tensor& tensor, int64_t column) {
+        // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
-        
+
+
+        // DEBUG_PRINT("HERE In the insert context function for some thread");
 
         int64_t c_t_temp;
-        double update_countLog_temp;
 
         auto accessor = tensor.accessor<int64_t, 2>();
-        for (int64_t i = 0; i < accessor.size(0); i++) {
-            int64_t current_level = 0;
-            size_t current_offset = 0;
-            for (int64_t j = 0; j < accessor.size(1); j++) {
-                int64_t value = accessor[i][j];
-                TrieNode* current = get_node(current_offset);
+        int64_t current_level = 0;
+        size_t current_offset = 0;
+        for (int64_t j = 0; j < accessor.size(1); j++) {
+            int64_t value = accessor[column][j];
+            
+            TrieNode* current = get_node(current_offset);
+            DEBUG_PRINT("Locking a parent node");
+            // current->node_mutex.lock();
+            mutex_array_lock[current->node_index].lock();
+            // DEBUG_PRINT("After locking a node");
+            // sleep(5);
 
-                if (j > 0) {
-                    num_total_contexts += 1;
-                }
-                
-                int64_t child_index = -1;
-                if (current->num_children > 0) {
-                    std::pair<int64_t, int64_t>* children = get_children(current);
-                    child_index = find_child(children, current->num_children, value);
-                }
-
-                if (child_index == -1) {
-                    size_t new_node_offset = allocate_node(current->node_level);
-                    TrieNode* new_node = get_node(new_node_offset);
-                    new_node->count = 0;
-                    new_node->num_children = 0;
-                    new_node->children_offset = 0;
-                    new_node->node_level = current_level + 1;
-
-                    if (new_node->node_level <= context_length) {
-                        num_total_contexts_per_level[new_node->node_level]++;
-                    }
-
-                    if (current->num_children == 0) {
-                        current->children_offset = allocate_children(1);
-                    } else {
-                        size_t new_children_offset = allocate_children(current->num_children + 1);
-                        std::memcpy(mapped_memory + new_children_offset, get_children(current), 
-                                    current->num_children * sizeof(std::pair<int64_t, int64_t>));
-                        current->children_offset = new_children_offset;
-                    }
-                    
-                    insert_child(current, value, new_node_offset);
-                    current_offset = new_node_offset;
-                } else {
-                    current_offset = get_children(current)[child_index].second;
-                }
-
-                c_t_temp = get_node(current_offset)->count;
-
-                if (current->node_index > 0 && c_t_temp > 0 && current->node_level <= 32){
-                    if(logcalc_memory[c_t_temp] == -1){
-                        logcalc_memory[c_t_temp] = (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp);
-                    }
-
-                    countLog_array[current->node_index] += logcalc_memory[c_t_temp];
-
-                    
-                }
-                ctxCount_array[current->node_index] += 1;
-                
-
-                get_node(current_offset)->count++;
-                current_level++;
+            // DEBUG_PRINT("f0");
+            if (j > 0) {
+                num_total_contexts += 1;
             }
+            
+            DEBUG_PRINT("f1");
+            int64_t child_index = -1;
+            if (current->num_children > 0) {
+                std::pair<int64_t, int64_t>* children = get_children(current);
+                child_index = find_child(children, current->num_children, value);
+            }
+
+            DEBUG_PRINT("f2");
+            if (child_index == -1) {
+                size_t new_node_offset = allocate_node(current->node_level);
+                TrieNode* new_node = get_node(new_node_offset);
+                DEBUG_PRINT("f3");
+                new_node->count = 0;
+                new_node->num_children = 0;
+                new_node->children_offset = 0;
+                new_node->node_level = current_level + 1;
+
+                if (new_node->node_level <= context_length) {
+                    num_total_contexts_per_level[new_node->node_level]++;
+                }
+
+                // DEBUG_PRINT("Locking alloc_memory_mutex");
+                // sleep(10);
+                alloc_memory_mutex.lock();
+                if (current->num_children == 0) {
+                    current->children_offset = allocate_children(1);
+                } else {
+                    size_t new_children_offset = allocate_children(current->num_children + 1);
+                    std::memcpy(mapped_memory + new_children_offset, get_children(current), 
+                                current->num_children * sizeof(std::pair<int64_t, int64_t>));
+                    current->children_offset = new_children_offset;
+                }
+                alloc_memory_mutex.unlock();
+                // DEBUG_PRINT("Unlocking alloc_memory_mutex");
+                // sleep(10);
+
+                insert_child(current, value, new_node_offset);
+                current_offset = new_node_offset;
+            } else {
+                DEBUG_PRINT("f4");
+                current_offset = get_children(current)[child_index].second;
+            }
+
+            DEBUG_PRINT("f5");
+            
+            DEBUG_PRINT("Locking a child node");
+            DEBUG_PRINT(get_node(current_offset)->node_index);
+            mutex_array_lock[get_node(current_offset)->node_index].lock();
+            // get_node(current_offset)->node_mutex.lock();
+            DEBUG_PRINT("f6");
+
+            c_t_temp = get_node(current_offset)->count;
+
+            if (current->node_index > 0 && c_t_temp > 0 && current->node_level <= 32){
+                if(logcalc_memory[c_t_temp] == -1){
+                    logcalc_memory[c_t_temp] = (c_t_temp + 1) * std::log(c_t_temp + 1) - (c_t_temp) * std::log(c_t_temp);
+                }
+                countLog_array[current->node_index] += logcalc_memory[c_t_temp];
+            }
+            ctxCount_array[current->node_index] += 1;
+            
+            DEBUG_PRINT("f7");
+            get_node(current_offset)->count++;
+            // get_node(current_offset)->node_mutex.unlock();
+            DEBUG_PRINT("Unlocking a child node");
+            mutex_array_lock[get_node(current_offset)->node_index].unlock();
+            current_level++;
+
+            // current->node_mutex.unlock();
+            DEBUG_PRINT("Unlocking a parent node");
+            mutex_array_lock[current->node_index].unlock();
         }
 
 
     }
 
+    void insert(torch::Tensor tensor) {
+        // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
+        TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
+        TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
+
+
+        DEBUG_PRINT("In the insert function ...");
+        // Multi-threaded insertion: create a thread for each word
+        std::vector<std::thread> threads;
+        // Create a thread for each column (word) in the tensor
+        for (int64_t col = 0; col < tensor.size(0); col++) {
+            threads.emplace_back([this, &tensor, col]() { this->insert_context(tensor, col); });
+        }
+        
+        // Join all threads
+        for (auto& th : threads) {
+            th.join();
+        }
+    }
 
     std::unordered_map<std::vector<int64_t>, int64_t> collect_all_sequences() {
         std::unordered_map<std::vector<int64_t>, int64_t> sequences;
