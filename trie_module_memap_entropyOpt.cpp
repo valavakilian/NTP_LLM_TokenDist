@@ -168,7 +168,7 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
                                
-    const size_t array_size = 1000000; // Size of the array
+    const size_t array_size = 1000000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int64_t> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -176,7 +176,7 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
 
-    const size_t size_logcalc_memory = 1000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
 
     TrieNode* get_node(size_t offset) {

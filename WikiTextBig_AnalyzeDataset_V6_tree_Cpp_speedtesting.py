@@ -332,8 +332,8 @@ if __name__ == "__main__":
         # else:
         print("Experiment is new ... ")
         up_to_ctx_count_processed = 0
-        context_tree_old = trie_module_memap_sorted_Opt.Trie_memap_sorted(memap_filename + "_base", 20, args.context_length)
-        context_tree = trie_module_memap_sorted_OptExp.Trie_memap_sorted_OptExp(memap_filename + "_optimized", 20, args.context_length)
+        context_tree_old = trie_module_memap_sorted_Opt.Trie_memap_sorted(memap_filename + "_base", 200, args.context_length)
+        context_tree = trie_module_memap_sorted_OptExp.Trie_memap_sorted_OptExp(memap_filename + "_optimized", 200, args.context_length)
 
         data_log = {
             "entropy": {},
@@ -393,9 +393,9 @@ if __name__ == "__main__":
                 # print(f"Context: {X}")
                 # print("New insert ...")
                 start_time_insert = time.time()
-                context_tree.insert(X[0:10,:])
-                # context_tree.insert(X)
-                input()
+                # context_tree.insert(X[0:10,:])
+                context_tree.insert(X)
+                # input()
                 new_insert_runtime += time.time() - start_time_insert
 
                 # print("Old insert ...")

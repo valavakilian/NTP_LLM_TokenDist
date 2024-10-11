@@ -169,7 +169,7 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
                                
-    const size_t array_size = 1000000; // Size of the array
+    const size_t array_size = 1000000000; // Size of the array
     std::vector<double> countLog_array;
     std::vector<int> ctxLen_array;
     std::vector<int64_t> ctxCount_array;
@@ -177,7 +177,7 @@ private:
     // MemMapArray<int> ctxLen_array;
     // MemMapArray<int> ctxCount_array;
 
-    const size_t size_logcalc_memory = 1000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
 
     std::mutex alloc_memory_mutex;
@@ -213,15 +213,15 @@ private:
     }
 
     size_t allocate_node(int64_t parent_level) {
-        DEBUG_PRINT("Locking alloc_memory_mutex");
+        // DEBUG_PRINT("Locking alloc_memory_mutex");
         alloc_memory_mutex.lock();
         size_t offset = allocate_space(sizeof(TrieNode));
         alloc_memory_mutex.unlock();
-        DEBUG_PRINT("Unlocking alloc_memory_mutex");
+        // DEBUG_PRINT("Unlocking alloc_memory_mutex");
         TrieNode* new_node = get_node(offset);
         new_node->node_level = parent_level + 1; 
 
-        DEBUG_PRINT("Locking alloc_node_mutex");
+        // DEBUG_PRINT("Locking alloc_node_mutex");
         alloc_node_mutex.lock();
         if (new_node->node_level <= context_length){
             node_counter += 1;
@@ -232,7 +232,7 @@ private:
             new_node->node_index = node_counter;
         }
         alloc_node_mutex.unlock();
-        DEBUG_PRINT("Unlocking alloc_node_mutex");
+        // DEBUG_PRINT("Unlocking alloc_node_mutex");
         return offset;
     }
 
@@ -535,8 +535,8 @@ public:
             int64_t value = accessor[column][j];
             
             TrieNode* current = get_node(current_offset);
-            DEBUG_PRINT("Locking a parent node");
-            DEBUG_PRINT(current->node_index);
+            // DEBUG_PRINT("Locking a parent node");
+            // DEBUG_PRINT(current->node_index);
             // current->node_mutex.lock();
             mutex_array_lock[current->node_index].lock();
             // DEBUG_PRINT("After locking a node");
@@ -547,18 +547,18 @@ public:
                 num_total_contexts += 1;
             }
             
-            DEBUG_PRINT("f1");
+            // DEBUG_PRINT("f1");
             int64_t child_index = -1;
             if (current->num_children > 0) {
                 std::pair<int64_t, int64_t>* children = get_children(current);
                 child_index = find_child(children, current->num_children, value);
             }
 
-            DEBUG_PRINT("f2");
+            // DEBUG_PRINT("f2");
             if (child_index == -1) {
                 size_t new_node_offset = allocate_node(current->node_level);
                 TrieNode* new_node = get_node(new_node_offset);
-                DEBUG_PRINT("f3");
+                // DEBUG_PRINT("f3");
                 new_node->count = 0;
                 new_node->num_children = 0;
                 new_node->children_offset = 0;
@@ -586,17 +586,17 @@ public:
                 insert_child(current, value, new_node_offset);
                 current_offset = new_node_offset;
             } else {
-                DEBUG_PRINT("f4");
+                // DEBUG_PRINT("f4");
                 current_offset = get_children(current)[child_index].second;
             }
 
-            DEBUG_PRINT("f5");
+            // DEBUG_PRINT("f5");
             
-            DEBUG_PRINT("Locking a child node");
-            DEBUG_PRINT(get_node(current_offset)->node_index);
+            // DEBUG_PRINT("Locking a child node");
+            // DEBUG_PRINT(get_node(current_offset)->node_index);
             mutex_array_lock[get_node(current_offset)->node_index].lock();
             // get_node(current_offset)->node_mutex.lock();
-            DEBUG_PRINT("f6");
+            // DEBUG_PRINT("f6");
 
             c_t_temp = get_node(current_offset)->count;
 
@@ -608,15 +608,15 @@ public:
             }
             ctxCount_array[current->node_index] += 1;
             
-            DEBUG_PRINT("f7");
+            // DEBUG_PRINT("f7");
             get_node(current_offset)->count++;
             // get_node(current_offset)->node_mutex.unlock();
-            DEBUG_PRINT("Unlocking a child node");
+            // DEBUG_PRINT("Unlocking a child node");
             mutex_array_lock[get_node(current_offset)->node_index].unlock();
             current_level++;
 
             // current->node_mutex.unlock();
-            DEBUG_PRINT("Unlocking a parent node");
+            // DEBUG_PRINT("Unlocking a parent node");
             mutex_array_lock[current->node_index].unlock();
         }
 
@@ -629,7 +629,7 @@ public:
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
 
 
-        DEBUG_PRINT("In the insert function ...");
+        // DEBUG_PRINT("In the insert function ...");
         // Multi-threaded insertion: create a thread for each word
         std::vector<std::thread> threads;
         // Create a thread for each column (word) in the tensor
