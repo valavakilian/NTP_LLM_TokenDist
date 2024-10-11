@@ -224,11 +224,12 @@ private:
         DEBUG_PRINT("Locking alloc_node_mutex");
         alloc_node_mutex.lock();
         if (new_node->node_level <= context_length){
+            node_counter += 1;
             new_node->node_index = node_counter;
             ctxLen_array[new_node->node_index] = new_node->node_level;
-            node_counter += 1;
         } else {
-            new_node->node_index = -1;
+            node_counter += 1;
+            new_node->node_index = node_counter;
         }
         alloc_node_mutex.unlock();
         DEBUG_PRINT("Unlocking alloc_node_mutex");
@@ -535,6 +536,7 @@ public:
             
             TrieNode* current = get_node(current_offset);
             DEBUG_PRINT("Locking a parent node");
+            DEBUG_PRINT(current->node_index);
             // current->node_mutex.lock();
             mutex_array_lock[current->node_index].lock();
             // DEBUG_PRINT("After locking a node");

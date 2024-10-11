@@ -393,7 +393,7 @@ if __name__ == "__main__":
                 # print(f"Context: {X}")
                 # print("New insert ...")
                 start_time_insert = time.time()
-                context_tree.insert(X[0:1,:])
+                context_tree.insert(X[0:10,:])
                 # context_tree.insert(X)
                 input()
                 new_insert_runtime += time.time() - start_time_insert
