@@ -134,6 +134,7 @@ struct TrieNode {
     bool is_root;  // New field to indicate if this is the root node
     int64_t node_level;
     int64_t node_index;
+    int64_t node_mutex_index;
     std::mutex node_mutex;  // Mutex for this node
 };
 
@@ -146,6 +147,7 @@ void printTrieNode(const TrieNode* node) {
     std::cout << "Is Root: " << (node->is_root ? "True" : "False") << std::endl;
     std::cout << "Node Level: " << node->node_level << std::endl;
     std::cout << "Node Index: " << node->node_index << std::endl;
+    std::cout << "Node Mutex Index: " << node->node_mutex_index << std::endl;
 }
 
 
@@ -164,18 +166,19 @@ private:
 
     int64_t context_length;
     int64_t node_counter;
+    int64_t node_mutex_counter;
     std::map<int64_t, int> num_unique_contexts_per_level;  // int64_t for the level, int for the count
     std::map<int64_t, int> num_total_contexts_per_level;
 
     std::map<int64_t, double> entropy_per_level;
                                
     const size_t array_size = 1000000000; // Size of the array
-    std::vector<double> countLog_array;
-    std::vector<int> ctxLen_array;
-    std::vector<int64_t> ctxCount_array;
-    // MemMapArray<double> countLog_array;
-    // MemMapArray<int> ctxLen_array;
-    // MemMapArray<int> ctxCount_array;
+    // std::vector<double> countLog_array;
+    // std::vector<int> ctxLen_array;
+    // std::vector<int64_t> ctxCount_array;
+    MemMapArray<double> countLog_array;
+    MemMapArray<int> ctxLen_array;
+    MemMapArray<int> ctxCount_array;
 
     const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
@@ -184,6 +187,12 @@ private:
     std::mutex alloc_node_mutex;
 
     std::vector<std::mutex> mutex_array_lock;  // Array of mutexes
+
+    const size_t MEMORY_THRESHOLD = 1ULL * 1024 * 1024 * 1024; // 1GB threshold
+
+    bool is_close_to_memory_limit() const {
+        return (allocated_size - file_size) <= MEMORY_THRESHOLD;
+    }
 
     TrieNode* get_node(size_t offset) {
         if (offset >= file_size) {
@@ -225,11 +234,14 @@ private:
         alloc_node_mutex.lock();
         if (new_node->node_level <= context_length){
             node_counter += 1;
+            node_mutex_counter += 1;
             new_node->node_index = node_counter;
+            new_node->node_mutex_index = node_mutex_counter;
             ctxLen_array[new_node->node_index] = new_node->node_level;
         } else {
-            node_counter += 1;
-            new_node->node_index = node_counter;
+            node_mutex_counter += 1;
+            new_node->node_mutex_index = node_mutex_counter;
+            new_node->node_index = -1;
         }
         alloc_node_mutex.unlock();
         // DEBUG_PRINT("Unlocking alloc_node_mutex");
@@ -375,9 +387,9 @@ private:
 
 public:
     Trie_memap_sorted_OptExp(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
-    : filename(fname + ".bin"), context_length(context_length), countLog_array(array_size, 0), 
-    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1)
-    , mutex_array_lock(array_size) {
+    : filename(fname + ".bin"), context_length(context_length), countLog_array(fname + "_countLog_arr.dat", array_size), 
+    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size)
+    , logcalc_memory(size_logcalc_memory, -1), mutex_array_lock(array_size) {
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
         if (fd == -1) {
@@ -407,19 +419,21 @@ public:
         root->children_offset = 0;
         root->is_root = true;  // Set the root node indicator
         root->node_index = 0;
+        root->node_mutex_index = 0;
 
         num_unique_contexts = 0;  // Count the root node
         num_total_contexts = 0;
         node_counter = 0;
+        node_mutex_counter = 0;
 
         DEBUG_PRINT("Trie initialized with allocated size: " << allocated_size << " bytes");
     }
 
     // Constructor to load an existing Trie from a file
     Trie_memap_sorted_OptExp(const std::string& fname) : 
-    filename(fname + ".bin"), countLog_array(array_size, 0), 
-    ctxLen_array(array_size, 0), ctxCount_array(array_size, 0), logcalc_memory(size_logcalc_memory, -1)
-    , mutex_array_lock(array_size){
+    filename(fname + ".bin"), countLog_array(fname + "_countLog_arr.dat", array_size), 
+    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size)
+    , logcalc_memory(size_logcalc_memory, -1), mutex_array_lock(array_size){
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
@@ -538,7 +552,7 @@ public:
             // DEBUG_PRINT("Locking a parent node");
             // DEBUG_PRINT(current->node_index);
             // current->node_mutex.lock();
-            mutex_array_lock[current->node_index].lock();
+            mutex_array_lock[current->node_mutex_index].lock();
             // DEBUG_PRINT("After locking a node");
             // sleep(5);
 
@@ -594,7 +608,7 @@ public:
             
             // DEBUG_PRINT("Locking a child node");
             // DEBUG_PRINT(get_node(current_offset)->node_index);
-            mutex_array_lock[get_node(current_offset)->node_index].lock();
+            mutex_array_lock[get_node(current_offset)->node_mutex_index].lock();
             // get_node(current_offset)->node_mutex.lock();
             // DEBUG_PRINT("f6");
 
@@ -612,18 +626,18 @@ public:
             get_node(current_offset)->count++;
             // get_node(current_offset)->node_mutex.unlock();
             // DEBUG_PRINT("Unlocking a child node");
-            mutex_array_lock[get_node(current_offset)->node_index].unlock();
+            mutex_array_lock[get_node(current_offset)->node_mutex_index].unlock();
             current_level++;
 
             // current->node_mutex.unlock();
             // DEBUG_PRINT("Unlocking a parent node");
-            mutex_array_lock[current->node_index].unlock();
+            mutex_array_lock[current->node_mutex_index].unlock();
         }
 
 
     }
 
-    void insert(torch::Tensor tensor) {
+    int insert(torch::Tensor tensor) {
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
@@ -641,6 +655,15 @@ public:
         for (auto& th : threads) {
             th.join();
         }
+
+        // Check if we're close to the memory limit after insertion
+        if (is_close_to_memory_limit()) {
+            // Save the model
+            save_metadata();
+            return 0;  // Indicating we're running out of memory
+        }
+
+        return 1;  // Indicating we're not running out of memory
     }
 
     std::unordered_map<std::vector<int64_t>, int64_t> collect_all_sequences() {
