@@ -172,7 +172,7 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
                                
-    const size_t array_size = 100000000; // Size of the array
+    const size_t array_size = 1000000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -180,7 +180,7 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
 
-    const size_t size_logcalc_memory = 100000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
 
     std::mutex alloc_memory_mutex;
@@ -221,17 +221,22 @@ private:
         // if (file_size > allocated_size) {
         //     throw std::runtime_error("Exceeded pre-allocated file size");
         // }
-        DEBUG_PRINT("+++++++++++++++++++++++++++++++++++++++++++++++++++");
-        DEBUG_PRINT("allocate_space ");
-        DEBUG_PRINT("file_size " << file_size);
-        DEBUG_PRINT("size " << size);
-        return file_size.fetch_add(size) + size;
+        // DEBUG_PRINT("+++++++++++++++++++++++++++++++++++++++++++++++++++");
+        // DEBUG_PRINT("allocate_space ");
+        // DEBUG_PRINT("file_size " << file_size);
+        // DEBUG_PRINT("size " << size);
+        return file_size.fetch_add(size);
     }
 
     size_t allocate_node(int64_t parent_level) {
+        // DEBUG_PRINT("+++++++++++++++++++++++++++++++++++++++++++++++++++");
+        // DEBUG_PRINT("allocate_node ");
         // DEBUG_PRINT("Locking alloc_memory_mutex");
         // alloc_memory_mutex.lock();
+        // DEBUG_PRINT("file_size before" << file_size);
         size_t offset = allocate_space(sizeof(TrieNode));
+        // DEBUG_PRINT("file_size after" << file_size);
+        // DEBUG_PRINT("offset before " << offset);
         // alloc_memory_mutex.unlock();
         // DEBUG_PRINT("Unlocking alloc_memory_mutex");
         TrieNode* new_node = get_node(offset);
@@ -255,6 +260,7 @@ private:
             // alloc_node_mutex.unlock();
         }
         
+        // DEBUG_PRINT("offset after " << offset);
         // DEBUG_PRINT("Unlocking alloc_node_mutex");
         return offset;
     }
@@ -501,13 +507,13 @@ public:
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
 
-        int current_nodes = ++active_nodes;
+        // int current_nodes = ++active_nodes;
 
         // Update the max_active_nodes if the current value is higher
-        int expected = max_active_nodes.load();
-        while (current_nodes > expected && !max_active_nodes.compare_exchange_weak(expected, current_nodes)) {
-            // The loop retries until max_active_nodes is correctly updated to the higher value
-        }
+        // int expected = max_active_nodes.load();
+        // while (current_nodes > expected && !max_active_nodes.compare_exchange_weak(expected, current_nodes)) {
+        //     // The loop retries until max_active_nodes is correctly updated to the higher value
+        // }
 
         // DEBUG_PRINT("HERE In the insert context function for some thread");
 
@@ -605,7 +611,7 @@ public:
             mutex_array_lock[current->node_mutex_index].unlock();
         }
 
-        active_nodes--;
+        // active_nodes--;
 
 
     }
@@ -637,7 +643,7 @@ public:
         // }
         
 
-        std::cout << "Max active nodes concurrently: " << max_active_nodes.load() << std::endl;
+        // std::cout << "Max active nodes concurrently: " << max_active_nodes.load() << std::endl;
 
         return 1;  // Indicating we're not running out of memory
     }
