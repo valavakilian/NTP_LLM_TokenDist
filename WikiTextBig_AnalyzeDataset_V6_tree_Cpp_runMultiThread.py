@@ -63,7 +63,7 @@ def load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length):
     # Merge all text data from train, validation, and test sets
     merged_text = dataset['train']['text'] + dataset['validation']['text'] + dataset['test']['text']
 
-    merged_text = merged_text[0:len(merged_text)/100]
+    merged_text = merged_text[0:len(merged_text)//10]
     # Train the tokenizer incrementally to reduce memory usage
     def batch_iterator(dataset, batch_size=300000):
         for i in range(0, len(dataset), batch_size):
@@ -320,7 +320,8 @@ if __name__ == "__main__":
         # else:
         print("Experiment is new ... ")
         up_to_ctx_count_processed = 0
-        context_tree = trie_module_memap_sorted_OptExp.Trie_memap_sorted_OptExp(memap_filename + "_multithreaded", 200, args.context_length)
+        context_tree = trie_module_memap_sorted_OptExp.Trie_memap_sorted_OptExp(memap_filename + "_multithreaded_test", 200, args.context_length)
+        # context_tree = trie_module_memap_sorted_Opt.Trie_memap_sorted(memap_filename + "_base", 200, args.context_length)
 
         data_log = {
             "entropy": {},

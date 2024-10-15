@@ -155,7 +155,7 @@ class Trie_memap_sorted_OptExp {
 private:
     int fd;
     char* mapped_memory;
-    size_t file_size;
+    std::atomic<size_t> file_size;
     size_t allocated_size;
     std::string filename;
     std::string metadata_filename;
@@ -165,14 +165,14 @@ private:
     std::atomic<int64_t> num_total_contexts;  // New global parameter for total context count
 
     int64_t context_length;
-    int64_t node_counter;
-    int64_t node_mutex_counter;
+    std::atomic<int64_t> node_counter;
+    std::atomic<int64_t> node_mutex_counter;
     std::map<int64_t, int> num_unique_contexts_per_level;  // int64_t for the level, int for the count
     std::map<int64_t, int> num_total_contexts_per_level;
 
     std::map<int64_t, double> entropy_per_level;
                                
-    const size_t array_size = 1000000000; // Size of the array
+    const size_t array_size = 100000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -180,13 +180,17 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
 
-    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 100000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
 
     std::mutex alloc_memory_mutex;
     std::mutex alloc_node_mutex;
 
     std::vector<std::mutex> mutex_array_lock;  // Array of mutexes
+
+
+    std::atomic<int> active_nodes{0};
+    std::atomic<int> max_active_nodes{0};  // New variable to track maximum
 
     const size_t MEMORY_THRESHOLD = 1ULL * 1024 * 1024 * 1024; // 1GB threshold
 
@@ -212,38 +216,45 @@ private:
     // Modify the allocate_space function to periodically update critical info
     size_t allocate_space(size_t size) {
         
-        size_t offset = file_size;
-        file_size += size;
-        if (file_size > allocated_size) {
-            throw std::runtime_error("Exceeded pre-allocated file size");
-        }
-        
-        return offset;
+        // size_t offset = file_size.fetch_add(size);
+        // file_size += size;
+        // if (file_size > allocated_size) {
+        //     throw std::runtime_error("Exceeded pre-allocated file size");
+        // }
+        DEBUG_PRINT("+++++++++++++++++++++++++++++++++++++++++++++++++++");
+        DEBUG_PRINT("allocate_space ");
+        DEBUG_PRINT("file_size " << file_size);
+        DEBUG_PRINT("size " << size);
+        return file_size.fetch_add(size) + size;
     }
 
     size_t allocate_node(int64_t parent_level) {
         // DEBUG_PRINT("Locking alloc_memory_mutex");
-        alloc_memory_mutex.lock();
+        // alloc_memory_mutex.lock();
         size_t offset = allocate_space(sizeof(TrieNode));
-        alloc_memory_mutex.unlock();
+        // alloc_memory_mutex.unlock();
         // DEBUG_PRINT("Unlocking alloc_memory_mutex");
         TrieNode* new_node = get_node(offset);
         new_node->node_level = parent_level + 1; 
 
         // DEBUG_PRINT("Locking alloc_node_mutex");
-        alloc_node_mutex.lock();
+        
         if (new_node->node_level <= context_length){
-            node_counter += 1;
-            node_mutex_counter += 1;
-            new_node->node_index = node_counter;
-            new_node->node_mutex_index = node_mutex_counter;
+            // alloc_node_mutex.lock();
+            // node_counter += 1;
+            // node_mutex_counter += 1;
+            new_node->node_index = node_counter.fetch_add(1) + 1;
+            new_node->node_mutex_index = node_mutex_counter.fetch_add(1) + 1;
+            // alloc_node_mutex.unlock();
             ctxLen_array[new_node->node_index] = new_node->node_level;
         } else {
-            node_mutex_counter += 1;
-            new_node->node_mutex_index = node_mutex_counter;
+            // alloc_node_mutex.lock();
+            // node_mutex_counter += 1;
+            new_node->node_mutex_index = node_mutex_counter.fetch_add(1) + 1;
             new_node->node_index = -1;
+            // alloc_node_mutex.unlock();
         }
-        alloc_node_mutex.unlock();
+        
         // DEBUG_PRINT("Unlocking alloc_node_mutex");
         return offset;
     }
@@ -303,64 +314,6 @@ private:
             current_sequence.pop_back();
         }
     }
-
-
-    double calculate_and_sum_entropy(size_t root_offset) {
-        auto start_time = std::chrono::steady_clock::now();
-        const auto timeout_duration = std::chrono::seconds(5000);
-        double total_entropy = 0.0;
-        std::stack<size_t> node_stack;
-        node_stack.push(root_offset);
-
-        while (!node_stack.empty()) {
-            if (std::chrono::steady_clock::now() - start_time > timeout_duration) {
-                throw std::runtime_error("Entropy calculation timed out after 5000 seconds. Returning default value.");
-                std::cout << "Entropy calculation timed out after 5000 seconds. Returning default value." << std::endl;
-                return -1;
-            }
-
-            size_t current_offset = node_stack.top();
-            node_stack.pop();
-
-            TrieNode* node = get_node(current_offset);
-            std::pair<int64_t, int64_t>* children = get_children(node);
-            
-            double Pi_j = static_cast<double>(node->count) / num_total_contexts;
-            double context_entropy = 0.0;
-            int64_t context_total = 0;
-
-            for (int64_t i = 0; i < node->num_children; ++i) {
-                TrieNode* child = get_node(children[i].second);
-                context_total += child->count;
-            }
-
-            if (context_total > 0) {
-                for (int64_t i = 0; i < node->num_children; ++i) {
-                    TrieNode* child = get_node(children[i].second);
-                    double p_t = static_cast<double>(child->count) / context_total;
-                    if (p_t > 0) {
-                        context_entropy -= p_t * std::log(p_t);
-                    }
-                }
-            }
-
-            double node_contribution = Pi_j * context_entropy;
-            total_entropy += node_contribution;
-
-            if (node->num_children > 0) {
-                num_unique_contexts++;
-                num_unique_contexts_per_level[node->node_level]++;
-                entropy_per_level[node->node_level] += node_contribution;
-            }
-
-            for (int64_t i = 0; i < node->num_children; ++i) {
-                node_stack.push(children[i].second);
-            }
-        }
-
-        return total_entropy;
-    }
-    
 
     size_t find_node(const std::vector<int64_t>& sequence) {
         size_t current_offset = 0;  // Start from the root
@@ -476,6 +429,7 @@ public:
             file << num_total_contexts.load() << "\n";
             file << context_length << "\n";
             file << node_counter << "\n";
+            file << node_mutex_counter << "\n";
 
             for (const auto& [level, count] : num_unique_contexts_per_level) {
                 file << "level " << level << " " << count << "\n";
@@ -494,7 +448,10 @@ public:
         // Open the metadata file
         std::ifstream file(metadata_filename);
         if (file.is_open()) {
-            file >> file_size;
+            size_t temp_size; 
+            file >> temp_size;
+            file_size.store(temp_size);
+
             file >> allocated_size;
             int64_t num_unique_contexts_val, num_total_contexts_val;
             file >> num_unique_contexts_val;
@@ -502,7 +459,14 @@ public:
             num_unique_contexts.store(num_unique_contexts_val);
             num_total_contexts.store(num_total_contexts_val);
             file >> context_length;
-            file >> node_counter;
+
+            int64_t temp_counter; 
+            
+            file >> temp_counter;
+            node_counter.store(temp_counter);
+
+            file >> temp_counter;
+            node_mutex_counter.store(temp_counter);
 
             // Assuming a known format
             std::string temp;
@@ -537,6 +501,13 @@ public:
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
 
+        int current_nodes = ++active_nodes;
+
+        // Update the max_active_nodes if the current value is higher
+        int expected = max_active_nodes.load();
+        while (current_nodes > expected && !max_active_nodes.compare_exchange_weak(expected, current_nodes)) {
+            // The loop retries until max_active_nodes is correctly updated to the higher value
+        }
 
         // DEBUG_PRINT("HERE In the insert context function for some thread");
 
@@ -584,7 +555,7 @@ public:
 
                 // DEBUG_PRINT("Locking alloc_memory_mutex");
                 // sleep(10);
-                alloc_memory_mutex.lock();
+                // alloc_memory_mutex.lock();
                 if (current->num_children == 0) {
                     current->children_offset = allocate_children(1);
                 } else {
@@ -593,7 +564,7 @@ public:
                                 current->num_children * sizeof(std::pair<int64_t, int64_t>));
                     current->children_offset = new_children_offset;
                 }
-                alloc_memory_mutex.unlock();
+                // alloc_memory_mutex.unlock();
                 // DEBUG_PRINT("Unlocking alloc_memory_mutex");
                 // sleep(10);
 
@@ -608,7 +579,7 @@ public:
             
             // DEBUG_PRINT("Locking a child node");
             // DEBUG_PRINT(get_node(current_offset)->node_index);
-            mutex_array_lock[get_node(current_offset)->node_mutex_index].lock();
+            // mutex_array_lock[get_node(current_offset)->node_mutex_index].lock();
             // get_node(current_offset)->node_mutex.lock();
             // DEBUG_PRINT("f6");
 
@@ -626,13 +597,15 @@ public:
             get_node(current_offset)->count++;
             // get_node(current_offset)->node_mutex.unlock();
             // DEBUG_PRINT("Unlocking a child node");
-            mutex_array_lock[get_node(current_offset)->node_mutex_index].unlock();
+            // mutex_array_lock[get_node(current_offset)->node_mutex_index].unlock();
             current_level++;
 
             // current->node_mutex.unlock();
             // DEBUG_PRINT("Unlocking a parent node");
             mutex_array_lock[current->node_mutex_index].unlock();
         }
+
+        active_nodes--;
 
 
     }
@@ -656,12 +629,15 @@ public:
             th.join();
         }
 
-        // Check if we're close to the memory limit after insertion
-        if (is_close_to_memory_limit()) {
-            // Save the model
-            save_metadata();
-            return 0;  // Indicating we're running out of memory
-        }
+        // // Check if we're close to the memory limit after insertion
+        // if (is_close_to_memory_limit() || node_mutex_counter >= array_size - 5000 || node_counter >= array_size - 5000) {
+        //     // Save the model
+        //     save_metadata();
+        //     return 0;  // Indicating we're running out of memory
+        // }
+        
+
+        std::cout << "Max active nodes concurrently: " << max_active_nodes.load() << std::endl;
 
         return 1;  // Indicating we're not running out of memory
     }
@@ -679,22 +655,6 @@ public:
 
     size_t get_allocated_size() const {
         return allocated_size;
-    }
-
-
-    double calculate_and_get_entropy() {
-        num_unique_contexts = 0;
-        for (auto& pair : num_unique_contexts_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-        for (auto& pair : entropy_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        double total_entropy = calculate_and_sum_entropy(0);  // Start from the root
-        num_unique_contexts -= 1; // Remove the count for the root node
-        
-        return total_entropy ;  // Normalize by total number of nodes
     }
 
 
@@ -735,7 +695,7 @@ public:
             entropy_per_level[t] /= -total_counter;
         }
 
-        num_unique_contexts = node_counter;
+        num_unique_contexts = node_counter.load();
         
         return total_entropy ;  // Normalize by total number of nodes
     }
@@ -834,7 +794,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             auto sequences = trie.collect_all_sequences();
             return convert_to_python_dict(sequences);
         })
-        .def("calculate_and_get_entropy", &Trie_memap_sorted_OptExp::calculate_and_get_entropy)
         .def("get_memory_usage", &Trie_memap_sorted_OptExp::get_memory_usage)
         .def("get_allocated_size", &Trie_memap_sorted_OptExp::get_allocated_size)
         .def("get_num_unique_contexts", &Trie_memap_sorted_OptExp::get_num_unique_contexts)  // New method to access num_unique_contexts

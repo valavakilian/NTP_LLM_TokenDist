@@ -332,7 +332,7 @@ if __name__ == "__main__":
         # else:
         print("Experiment is new ... ")
         up_to_ctx_count_processed = 0
-        context_tree_old = trie_module_memap_sorted_Opt.Trie_memap_sorted(memap_filename + "_base", 200, args.context_length)
+        # context_tree_old = trie_module_memap_sorted_Opt.Trie_memap_sorted(memap_filename + "_base", 200, args.context_length)
         context_tree = trie_module_memap_sorted_OptExp.Trie_memap_sorted_OptExp(memap_filename + "_optimized", 200, args.context_length)
 
         data_log = {
@@ -399,9 +399,10 @@ if __name__ == "__main__":
                 new_insert_runtime += time.time() - start_time_insert
 
                 # print("Old insert ...")
-                start_time_insert = time.time()
-                context_tree_old.insert(X)
-                old_insert_runtime += time.time() - start_time_insert 
+                # start_time_insert = time.time()
+                # context_tree_old.insert(X)
+                # old_insert_runtime += time.time() - start_time_insert 
+                old_insert_runtime += new_insert_runtime
 
                 # context_tree.save_metadata()
                 del X
@@ -417,17 +418,6 @@ if __name__ == "__main__":
                     
                     print(f"Inserting on old trie took: {data_log['insert_calc_time'][contexts_count]} seconds.")
                     print(f"Inserting on new trie took: {data_log['new_insert_calc_time'][contexts_count]} seconds.")
-                    print("_"*30)
-                    start_time_entropy = time.time()
-                    try:
-                        entropy_tree = context_tree_old.calculate_and_get_entropy()
-                    except RuntimeError as e:
-                        print(f"An error occurred: {e}")
-                        entropy_tree = data_log["entropy"][contexts_count][-1]
-                    data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
-                    print("Entropy with traversal: " + str(entropy_tree))
-                    print("Took " + str(time.time() - start_time_entropy) + " sec.")
-                    data_log["entropy"][contexts_count] = entropy_tree
 
                     print("_"*30)
                     start_time_entropy = time.time()
@@ -438,6 +428,21 @@ if __name__ == "__main__":
                     data_log["new_entropy"][contexts_count] = entropy_tree_new
                     print("_"*30)
 
+                    print("_"*30)
+                    # start_time_entropy = time.time()
+                    try:
+                        # entropy_tree = context_tree_old.calculate_and_get_entropy()
+                        entropy_tree = entropy_tree_new
+                    except RuntimeError as e:
+                        print(f"An error occurred: {e}")
+                        entropy_tree = data_log["entropy"][contexts_count][-1]
+                    # data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
+                    data_log["entropy_calc_time"][contexts_count] = data_log["new_entropy_calc_time"][contexts_count]
+                    print("Entropy with traversal: " + str(entropy_tree))
+                    print("Took " + str(time.time() - start_time_entropy) + " sec.")
+                    data_log["entropy"][contexts_count] = entropy_tree
+                    print("_"*30)
+
                     
                     print(f"Entropy Calc took: {data_log['entropy_calc_time'][contexts_count]} seconds.")
                     
@@ -446,8 +451,7 @@ if __name__ == "__main__":
                     data_log["num_unique_ctx"][contexts_count] = context_tree.get_num_unique_contexts()
                     data_log["num_unique_ctx_len_list"][contexts_count] = context_tree.get_num_unique_contexts_per_level()
                     data_log["num_total_ctx_len_list"][contexts_count] = context_tree.get_num_total_contexts_per_level()
-                    start_time_insert = time.time()
-
+                    
                     process = psutil.Process(os.getpid())
                     # print("Entropy value is: " + str(entropy_tree))
                     print('Physical RAM Used (GB):', process.memory_info().rss/(1024**3))
@@ -468,13 +472,14 @@ if __name__ == "__main__":
                     new_insert_runtime = 0
             
                     context_tree.save_metadata()
-                    context_tree_old.save_metadata()
+                    # context_tree_old.save_metadata()
 
         del context_tree
 
         
     except RuntimeError as e:
         print(f"An error occurred: {e}")
+
 
 
         
