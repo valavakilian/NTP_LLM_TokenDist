@@ -585,7 +585,7 @@ public:
             
             // DEBUG_PRINT("Locking a child node");
             // DEBUG_PRINT(get_node(current_offset)->node_index);
-            // mutex_array_lock[get_node(current_offset)->node_mutex_index].lock();
+            mutex_array_lock[get_node(current_offset)->node_mutex_index].lock();
             // get_node(current_offset)->node_mutex.lock();
             // DEBUG_PRINT("f6");
 
@@ -603,7 +603,7 @@ public:
             get_node(current_offset)->count++;
             // get_node(current_offset)->node_mutex.unlock();
             // DEBUG_PRINT("Unlocking a child node");
-            // mutex_array_lock[get_node(current_offset)->node_mutex_index].unlock();
+            mutex_array_lock[get_node(current_offset)->node_mutex_index].unlock();
             current_level++;
 
             // current->node_mutex.unlock();
