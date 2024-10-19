@@ -8,8 +8,6 @@ import json
 import os
 import random
 from typing import List
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
 
 import numpy as np
 import requests
@@ -44,7 +42,6 @@ import numpy as np
 
 from datasets import load_from_disk
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers
-import torch
 from torch.utils.data import Dataset, DataLoader
 import os
 
@@ -63,7 +60,7 @@ def load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length):
     # Merge all text data from train, validation, and test sets
     merged_text = dataset['train']['text'] + dataset['validation']['text'] + dataset['test']['text']
 
-    merged_text = merged_text[0:len(merged_text)]
+    merged_text = merged_text[0:len(merged_text)//10]
     # Train the tokenizer incrementally to reduce memory usage
     def batch_iterator(dataset, batch_size=300000):
         for i in range(0, len(dataset), batch_size):
@@ -258,6 +255,9 @@ if __name__ == "__main__":
     parser.add_argument("--exp_case", type=int, default=0, help="Number of stories to use")
     args = parser.parse_args()
 
+    # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
+    #     file.write("Got in ? \n")
+
     vocab_sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8196, 16392]
     context_lenghts = [32, 64, 128, 256, 512, 1024]
 
@@ -299,6 +299,10 @@ if __name__ == "__main__":
     #     print(f"The example for {save_logs_filename} is already completed. Breaking out.")
     #     sys.exit()
 
+
+    # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
+    #     file.write("Program started\n")
+
     try:
         
         # if exp_was_initiated: 
@@ -323,6 +327,9 @@ if __name__ == "__main__":
         context_tree = trie_module_memap_sorted_OptExp.Trie_memap_sorted_OptExp(memap_filename + "_multithreaded", 200, args.context_length)
         # context_tree = trie_module_memap_sorted_Opt.Trie_memap_sorted(memap_filename + "_base", 200, args.context_length)
 
+        # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
+        #     file.write("Tree made\n")
+
         data_log = {
             "entropy": {},
             "entropy_per_ctx_len": {},
@@ -344,6 +351,9 @@ if __name__ == "__main__":
         # Step 4: Load and Tokenize the Wikitext-2 Dataset
         tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length)
 
+        # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
+        #     file.write("Loaded Wikitext\n")
+
         num_examples = len(tokenized_data) - context_length
         num_batches = math.ceil(num_examples / batch_size)
         print("=" * 100)
@@ -357,6 +367,9 @@ if __name__ == "__main__":
 
         # Step 5: Create the DataLoader
         dataloader = create_dataloader(tokenized_data, context_length, batch_size)
+
+        # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
+        #     file.write("Created Dataloader\n")
 
 
         insert_runtime = 0
@@ -375,6 +388,7 @@ if __name__ == "__main__":
                 print("Context count " + str(contexts_count) + " is already processed.")
             else:
                 start_time_insert = time.time()
+                # print(X[0:100, :].shape)
                 insert_done = context_tree.insert(X)
                 insert_runtime += time.time() - start_time_insert
 
@@ -446,3 +460,11 @@ if __name__ == "__main__":
         
 
     
+# import torch
+
+
+# print("ASND GHASJI DJbkAfsdhufskbgdagfagbfkgbhjkasghbfjs")
+
+
+# with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
+#     file.write("Got in ? \n")

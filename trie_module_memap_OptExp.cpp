@@ -179,7 +179,7 @@ private:
     MemMapArray<double> countLog_array;
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
-
+                                       
     const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory;
 
@@ -502,7 +502,7 @@ public:
         std::cout << "Destroyed the trie."<< std::endl;
     }
 
-    void insert_context(const torch::Tensor& tensor, int64_t column) {
+    void insert_context(const torch::Tensor& tensor, int64_t column) {        
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
