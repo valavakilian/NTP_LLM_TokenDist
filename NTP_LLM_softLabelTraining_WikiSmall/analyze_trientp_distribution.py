@@ -448,7 +448,7 @@ if __name__ == "__main__":
     batch_size = args.batch_size
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
-    tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, args.vocab_size, data_ratio = 1.0)
+    tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, args.vocab_size, data_ratio = 0.1)
     # maxim = 0
     # for t in tokenized_data:
     #     if t > args.vocab_size:
@@ -468,150 +468,43 @@ if __name__ == "__main__":
     print("Entropy Calculated: " + str(dataset_entropy))
 
 
-    # for X in dataloader:
-
-    #     exe_of_ctx_to_get = X[0:10,:]
-        
-    #     get_soft_label(context_tree, args, exe_of_ctx_to_get)
-
-    #     input()
-
-
-    # Model configuration (same model setup for both)
-    model_config = GPT2Config(
-        vocab_size=args.vocab_size,
-        n_positions=args.context_length,
-        n_embd=512,
-        n_layer=4,
-        n_head=4,
-    )
-
-    
-    # Initialize two separate models
-    model_one_hot = GPT2LMHeadModel(model_config)
-    model_soft_label = GPT2LMHeadModel(model_config)
-    print("Model created on cpu ...")
-    
-    # Copy the weights from model_one_hot to model_soft_label
-    model_soft_label.load_state_dict(model_one_hot.state_dict())
-
-    model_one_hot = torch.compile(model_one_hot)
-    model_soft_label = torch.compile(model_soft_label)
-
-
-    # Move models to GPU if available
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    if torch.cuda.device_count() > 1:
-        model_one_hot = nn.DataParallel(model_one_hot)
-        model_soft_label = nn.DataParallel(model_soft_label)
-        
-    model_one_hot.to(device)
-    model_soft_label.to(device)
-    print("Model created ...")
-
-
-    # Optimizers for each model
-    optimizer_one_hot = AdamW(model_one_hot.parameters(), lr=5e-4)
-    optimizer_soft_label = AdamW(model_soft_label.parameters(), lr=5e-4)
-    
-
-    # Setup the scheduler based on selection
-    if args.scheduler_type == 'cosine':
-        scheduler_one_hot = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_one_hot, T_max=num_epochs)
-        scheduler_soft_label = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_soft_label, T_max=num_epochs)
-    else:
-        scheduler_one_hot = torch.optim.lr_scheduler.StepLR(optimizer_one_hot, step_size=30, gamma=0.1)  # Reduce LR every 10 epochs by a factor of 0.1
-        scheduler_soft_label = torch.optim.lr_scheduler.StepLR(optimizer_soft_label, step_size=30, gamma=0.1)
-
-    # Loss function
-    loss_fn = CrossEntropyLoss(reduction = "sum")
-
-
-    loss_one_hot_list = []
-    loss_soft_label_list = []
-    
-    print("Initiating training ... ")
+    print("Analyzing Data ... ")
     # Manual training loop
+    num_datapoints = 0
     
-    for epoch in range(num_epochs):
-        print(f"Epoch {epoch} ...")
-        model_one_hot.train()
-        model_soft_label.train()
+
+    count_num_one_hots = 0
+    num_total_samples = 0
+    # Training loop for the first model on dataset1
+    for batch in dataloader:
         
-        total_loss_one_hot = 0
-        total_loss_soft_label = 0
-        
+        # Extract `x` (input) and `y` (target) from the full sequence
+        x_batch = batch[:, :-1]  # Everything except the last token
+        # print(batch[:, 1:].shape)
+        # print(batch[:, 1:])
+        y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
+        y_soft_label = get_soft_label(context_tree, args, batch).float()
 
-        num_datapoints = 0
+        # print(y_soft_label)
+        # print(y_soft_label.shape)
 
-        # Training loop for the first model on dataset1
-        for batch in dataloader:
-            
-            # Extract `x` (input) and `y` (target) from the full sequence
-            x_batch = batch[:, :-1]  # Everything except the last token
-            # print(batch[:, 1:].shape)
-            # print(batch[:, 1:])
-            y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).to(device).float()  # Assuming vocab_size is defined
-            y_soft_label = get_soft_label(context_tree, args, batch).float()
+        # Count non-zero entries along the last dimension
+        non_zero_counts = (y_soft_label != 0).sum(dim=-1)
 
-            # `batch` contains the full sequence [x || y]
-            x_batch, y_one_hot, y_soft_label = x_batch.to(device), y_one_hot.to(device), y_soft_label.to(device)
+        # Check if only one non-zero per example and count them
+        single_non_zero_count = (non_zero_counts == 1).sum()
 
+        # input()
+        # print(non_zero_counts)
+        # print(non_zero_counts.shape)
+        # input()
+        # print(single_non_zero_count)
+        # print(single_non_zero_count.shape)
+        # input()
+        count_num_one_hots += single_non_zero_count.item()
+        num_total_samples += batch.shape[0] * batch.shape[1]
 
-            # Forward pass for one hot model
-            outputs = model_one_hot(x_batch)
-            pred_logits = outputs.logits
-            # pred_logits = F.softmax(pred_logits, dim=-1)
-            # print(y_one_hot[0,:,0:10])
-            # print(pred_logits[0,:,0:10])
-            # input()
-            loss = loss_fn(pred_logits, y_one_hot) 
-            # Backward pass and optimization for one hot model
-            optimizer_one_hot.zero_grad()
-            loss.backward()
-            optimizer_one_hot.step()
-            total_loss_one_hot += loss.item()
-            loss = 0
-            
-
-            # Forward pass for soft label model
-            outputs = model_soft_label(x_batch)
-            pred_logits = outputs.logits
-            # pred_logits = F.softmax(pred_logits, dim=-1)
-            loss = loss_fn(pred_logits, y_soft_label) 
-            # Backward pass and optimization for soft label model
-            optimizer_soft_label.zero_grad()
-            loss.backward()
-            optimizer_soft_label.step()
-            total_loss_soft_label += loss.item()
-            loss = 0
-
-            num_datapoints += x_batch.shape[0]
-
-
-        loss_one_hot_list.append(total_loss_one_hot / (num_datapoints * args.context_length))
-        loss_soft_label_list.append(total_loss_soft_label / (num_datapoints * args.context_length))
-
-
-        scheduler_one_hot.step()
-        scheduler_soft_label.step()
-        
-        
-        print(f"Completed {epoch+1}/{num_epochs} epochs - \n Dataset entropy: {dataset_entropy}, \n Loss one hot model: {loss_one_hot_list[-1]}, \n Loss soft label model: {loss_soft_label_list[-1]}")
-        print("_" * 100)
-
-        # Plot the loss curve
-        plt.plot(range(0, epoch+1), loss_one_hot_list, marker='o', linestyle='-', label=f'Loss one-hot: {loss_one_hot_list[-1]:.4f}', color='blue')
-        plt.plot(range(0, epoch+1), loss_soft_label_list, marker='v', linestyle='-', label=f'Loss soft-label: {loss_soft_label_list[-1]:.4f}', color='green')
-        plt.axhline(y=dataset_entropy, color='black', linestyle='-', label=f'Entropy: {dataset_entropy:.4f}')
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title("Training Loss Over Epochs")
-        plt.legend()
-        plt.savefig(f"/scratch/st-cthrampo-1/vaalaa/NTP_LLM_softLabelTraining_WikiSmall/training_graphs/Loss_one_hot_vs_soft_label_{memap_filename}.jpg")
-        plt.clf()
+    print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples, 3)))
 
     print("Training complete!")
 
