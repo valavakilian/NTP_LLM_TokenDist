@@ -467,6 +467,34 @@ if __name__ == "__main__":
     dataset_entropy = context_tree.calculate_and_get_entropy_faster()
     print("Entropy Calculated: " + str(dataset_entropy))
 
+    
+    print("Loading the model to see if the issue is with the model")
+    # Model configuration (same model setup for both)
+    model_config = GPT2Config(
+        vocab_size=args.vocab_size,
+        n_positions=args.context_length,
+        n_embd=512,
+        n_layer=4,
+        n_head=4,
+    )
+
+    
+    # Initialize two separate models
+    model_one_hot = GPT2LMHeadModel(model_config)
+    model_soft_label = GPT2LMHeadModel(model_config)
+    print("Model created on cpu ...")
+    
+    # Copy the weights from model_one_hot to model_soft_label
+    model_soft_label.load_state_dict(model_one_hot.state_dict())
+
+    model_one_hot = torch.compile(model_one_hot)
+    model_soft_label = torch.compile(model_soft_label)
+
+
+    # Move models to GPU if available
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
     print("Analyzing Data ... ")
     # Manual training loop
@@ -504,7 +532,7 @@ if __name__ == "__main__":
         count_num_one_hots += single_non_zero_count.item()
         num_total_samples += batch.shape[0] * batch.shape[1]
 
-    print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples, 3)))
+    print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
 
     print("Training complete!")
 

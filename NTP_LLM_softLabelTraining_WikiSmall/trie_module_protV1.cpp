@@ -230,6 +230,7 @@ private:
     }
 
     size_t allocate_node(int64_t parent_level) {
+        DEBUG_PRINT("Inside allocate_node ...");
         // DEBUG_PRINT("+++++++++++++++++++++++++++++++++++++++++++++++++++");
         // DEBUG_PRINT("allocate_node ");
         // DEBUG_PRINT("Locking alloc_memory_mutex");
@@ -249,6 +250,7 @@ private:
             // alloc_node_mutex.lock();
             // node_counter += 1;
             // node_mutex_counter += 1;
+            DEBUG_PRINT("After allocate_node node_counter is " << node_counter.load());
             new_node->node_index = node_counter.fetch_add(1) + 1;
             new_node->node_mutex_index = node_mutex_counter.fetch_add(1) + 1;
             // alloc_node_mutex.unlock();
@@ -503,7 +505,9 @@ public:
         std::cout << "Destroyed the trie."<< std::endl;
     }
 
-    std::vector<std::unordered_map<int64_t, double>> insert_context(const torch::Tensor& tensor, int64_t column, bool return_prob_distr) {        
+    std::vector<std::unordered_map<int64_t, double>> insert_context(const torch::Tensor& tensor, int64_t column, bool return_prob_distr) {   
+
+        std::cout << "inserting context."<< std::endl;     
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
@@ -594,11 +598,13 @@ public:
 
 
     py::list insert(torch::Tensor tensor, bool return_prob_distr) {
+
+        std::cout << "In insert."<< std::endl;    
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
 
-        const int num_threads = 128;  // Number of threads in the pool. Adjust as needed.
+        const int num_threads = 1;  // Number of threads in the pool. Adjust as needed.
         const int batch_size = std::max(1, static_cast<int>(tensor.size(0) / num_threads));
 
         std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(tensor.size(0));
@@ -775,7 +781,9 @@ public:
 
 
     double calculate_and_get_entropy_faster() {
-        
+        DEBUG_PRINT("________________________________________________________________");
+        DEBUG_PRINT("calculate_and_get_entropy_faster");
+
         // int64_t total_N = 0;
         double total_entropy = 0;
         double entropy_temp = 0;
@@ -789,9 +797,11 @@ public:
 
         int64_t total_counter = 0;
         int counter = 0;
+        DEBUG_PRINT(node_counter);
         for(int j = 1; j < node_counter; j++){
             entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
 
+            DEBUG_PRINT(ctxCount_array[j]);
             if (ctxCount_array[j] == 0){
                 counter += 1;
                 if (counter == 100){
