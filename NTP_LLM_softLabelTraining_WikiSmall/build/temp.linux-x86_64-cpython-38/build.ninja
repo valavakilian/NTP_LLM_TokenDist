@@ -15,7 +15,7 @@ rule compile
 
 
 
-build /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/NTP_LLM_softLabelTraining_WikiSmall/build/temp.linux-x86_64-cpython-38/arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/NTP_LLM_softLabelTraining_WikiSmall/trie_module_protV1.o: compile /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/NTP_LLM_softLabelTraining_WikiSmall/trie_module_protV1.cpp
+build /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/NTP_LLM_softLabelTraining_WikiSmall/build/temp.linux-x86_64-cpython-38/arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/NTP_LLM_softLabelTraining_WikiSmall/trie_module_protV1_singleThread.o: compile /arc/project/st-cthrampo-1/vala/NTP_LLM_tokenDist_Wiki/NTP_LLM_softLabelTraining_WikiSmall/trie_module_protV1_singleThread.cpp
 
 
 

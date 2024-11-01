@@ -64,6 +64,9 @@ import json
 import math
 
 
+print("Importing Done")
+
+
 def load_and_tokenize_wikitext(dataset_dir, vocab_size, data_ratio):
     # Load the dataset from the specified directory
     dataset = load_from_disk(dataset_dir)
@@ -324,7 +327,7 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
 
             contexts_count += X.shape[0]
             batches_seen += 1
-
+            
             if contexts_count <= up_to_ctx_count_processed: 
                 del X
                 print("Context count " + str(contexts_count) + " is already processed.")
@@ -393,7 +396,6 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
 
 
 def get_soft_label(context_tree, args, X):
-    # print(X)
     output = context_tree.retrieve_softlabel(X)
 
     # print(output)
@@ -403,13 +405,21 @@ def get_soft_label(context_tree, args, X):
         for ctx_index, ctx_dict in enumerate(soft_label_list[0:-1]):
             for vocab_index, vocab_count in ctx_dict.items():
                 y_soft_label[data_index, ctx_index, vocab_index] = vocab_count
-    y_soft_label = F.normalize(y_soft_label, p = 2, dim = 2)
+    y_soft_label = F.normalize(y_soft_label, p = 1, dim = 2)
 
     # print(y_soft_label)
     # print(torch.norm(y_soft_label[0,0,:], p = 2))
     # print(y_soft_label.shape)
 
     return y_soft_label
+
+
+
+def get_warmup_lr(base_lr, current_step, warmup_steps):
+    """Calculate learning rate during warmup period."""
+    return base_lr * current_step / warmup_steps
+
+
 
 if __name__ == "__main__":
     """
@@ -439,7 +449,7 @@ if __name__ == "__main__":
     num_epochs = 90
 
     print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
-    
+    print("So far so good")
 
     # Example usage
     dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiText'  # Your saved dataset folder
@@ -448,7 +458,7 @@ if __name__ == "__main__":
     batch_size = args.batch_size
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
-    tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, args.vocab_size, data_ratio = 1.0)
+    tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, args.vocab_size, data_ratio = 0.1)
     # maxim = 0
     # for t in tokenized_data:
     #     if t > args.vocab_size:
@@ -457,32 +467,13 @@ if __name__ == "__main__":
     # print(maxim)
     # input()
 
-    # Step 5: Create the DataLoader
-    dataloader, num_ctx = create_dataloader(tokenized_data, context_length, args.batch_size, args.step_size)
-
-    num_milestones = 10
-    memap_filename = f"voc{args.vocab_size}_ctxLen{args.context_length}"
-    context_tree = load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ctx)
-    print("Tree loading/contruction complete")
-    dataset_entropy = context_tree.calculate_and_get_entropy_faster()
-    print("Entropy Calculated: " + str(dataset_entropy))
-
-
-    # for X in dataloader:
-
-    #     exe_of_ctx_to_get = X[0:10,:]
-        
-    #     get_soft_label(context_tree, args, exe_of_ctx_to_get)
-
-    #     input()
-
-
+    # 
     # Model configuration (same model setup for both)
     model_config = GPT2Config(
         vocab_size=args.vocab_size,
         n_positions=args.context_length,
         n_embd=512,
-        n_layer=4,
+        n_layer=12,
         n_head=4,
     )
 
@@ -512,6 +503,21 @@ if __name__ == "__main__":
     print("Model created ...")
 
 
+    # Step 5: Create the DataLoader
+    dataloader, num_ctx = create_dataloader(tokenized_data, context_length, args.batch_size, args.step_size)
+    print("Dataloader Created")
+
+    num_milestones = 10
+    memap_filename = f"voc{args.vocab_size}_ctxLen{args.context_length}"
+    context_tree = load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ctx)
+    print("Tree loading/contruction complete")
+    dataset_entropy = context_tree.calculate_and_get_entropy_faster()
+    print("Entropy Calculated: " + str(dataset_entropy))
+    # dataset_entropy = 0
+
+
+
+
     # Optimizers for each model
     optimizer_one_hot = AdamW(model_one_hot.parameters(), lr=5e-4)
     optimizer_soft_label = AdamW(model_soft_label.parameters(), lr=5e-4)
@@ -524,6 +530,13 @@ if __name__ == "__main__":
     else:
         scheduler_one_hot = torch.optim.lr_scheduler.StepLR(optimizer_one_hot, step_size=30, gamma=0.1)  # Reduce LR every 10 epochs by a factor of 0.1
         scheduler_soft_label = torch.optim.lr_scheduler.StepLR(optimizer_soft_label, step_size=30, gamma=0.1)
+
+
+    # initial_lr_one_hot = optimizer_one_hot.param_groups[0]['lr']
+    # initial_lr_soft_label = optimizer_soft_label.param_groups[0]['lr']
+
+    # total_steps_per_epoch = len(dataloader)
+    # warmup_steps = total_steps_per_epoch
 
     # Loss function
     loss_fn = CrossEntropyLoss(reduction = "sum")
@@ -546,8 +559,20 @@ if __name__ == "__main__":
 
         num_datapoints = 0
 
+        batch_idx = 0
         # Training loop for the first model on dataset1
-        for batch in dataloader:
+        for batch in tqdm(dataloader):
+
+            # # Warmup learning rate during first epoch
+            # if epoch == 0:
+            #     current_step = batch_idx + 1
+            #     # Linear warmup
+            #     current_lr = get_warmup_lr(initial_lr_one_hot, current_step, warmup_steps)
+            #     for param_group in optimizer_one_hot.param_groups:
+            #         param_group['lr'] = current_lr
+            #     for param_group in optimizer_soft_label.param_groups:
+            #         param_group['lr'] = current_lr
+            #     batch_idx += 1
             
             # Extract `x` (input) and `y` (target) from the full sequence
             x_batch = batch[:, :-1]  # Everything except the last token
@@ -555,24 +580,45 @@ if __name__ == "__main__":
             # print(batch[:, 1:])
             y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).to(device).float()  # Assuming vocab_size is defined
             y_soft_label = get_soft_label(context_tree, args, batch).float()
+            # y_soft_label = y_one_hot
+            # print(y_one_hot.shape)
+            # print(y_soft_label.shape)
+            # print(y_one_hot[0,0,:])
+            # print(y_soft_label[0,0,:])
+            # print(torch.sum(y_one_hot[0,0,:]))
+            # print(torch.sum(y_soft_label[0,0,:]))
+            # input()
 
             # `batch` contains the full sequence [x || y]
             x_batch, y_one_hot, y_soft_label = x_batch.to(device), y_one_hot.to(device), y_soft_label.to(device)
 
-
+            # print("One hot:", y_one_hot[0,0,:].sum(), y_one_hot[0,0,:].max())
+            # print("Soft label:", y_soft_label[0,0,:].sum(), y_soft_label[0,0,:].max())
+            # print("Soft label sums:", y_soft_label.sum(dim=-1)[0,:5])
+            
+            
             # Forward pass for one hot model
             outputs = model_one_hot(x_batch)
             pred_logits = outputs.logits
+            log_probs = F.log_softmax(pred_logits, dim=-1)
+            loss = -(y_one_hot * log_probs).sum()
             # pred_logits = F.softmax(pred_logits, dim=-1)
             # print(y_one_hot[0,:,0:10])
-            # print(pred_logits[0,:,0:10])
+            # print(pred_logits.shape)
+            # print(y_one_hot.shape)
             # input()
-            loss = loss_fn(pred_logits, y_one_hot) 
+            # pred_flat = pred_logits.view(-1, args.vocab_size)
+            # target_flat = y_one_hot.view(-1, args.vocab_size)
+            # loss = loss_fn(pred_flat, target_flat)
+            # loss = loss_fn(pred_logits, y_one_hot) #/ (x_batch.shape[0])
+            # print(pred_flat.shape)
+            # print(target_flat.shape)
+            # print(pred_logits.shape)
             # Backward pass and optimization for one hot model
             optimizer_one_hot.zero_grad()
             loss.backward()
             optimizer_one_hot.step()
-            total_loss_one_hot += loss.item()
+            total_loss_one_hot += loss.item() #* ( x_batch.shape[0])
             loss = 0
             
 
@@ -580,21 +626,37 @@ if __name__ == "__main__":
             outputs = model_soft_label(x_batch)
             pred_logits = outputs.logits
             # pred_logits = F.softmax(pred_logits, dim=-1)
-            loss = loss_fn(pred_logits, y_soft_label) 
+            # pred_flat = pred_logits.view(-1, args.vocab_size)
+            # target_flat = y_soft_label.view(-1, args.vocab_size)
+            # loss = loss_fn(pred_flat, target_flat)
+            # loss = loss_fn(pred_logits, y_soft_label) #/ ( x_batch.shape[0])
             # Backward pass and optimization for soft label model
+            # print(pred_flat.shape)
+            # print(target_flat.shape)
+            log_probs = F.log_softmax(pred_logits, dim=-1)
+            loss = -(y_soft_label * log_probs).sum()
             optimizer_soft_label.zero_grad()
             loss.backward()
             optimizer_soft_label.step()
-            total_loss_soft_label += loss.item()
+            total_loss_soft_label += loss.item() #* ( x_batch.shape[0])
             loss = 0
 
             num_datapoints += x_batch.shape[0]
+            # input()
+
+            del x_batch
+            del y_one_hot
+            del y_soft_label
+            del pred_logits
+            # del pred_flat
+            # del target_flat
 
 
         loss_one_hot_list.append(total_loss_one_hot / (num_datapoints * args.context_length))
         loss_soft_label_list.append(total_loss_soft_label / (num_datapoints * args.context_length))
 
 
+        # if epoch >= 1:
         scheduler_one_hot.step()
         scheduler_soft_label.step()
         

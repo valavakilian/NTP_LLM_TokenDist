@@ -354,7 +354,6 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
 
 
 def get_soft_label(context_tree, args, X):
-    # print(X)
     output = context_tree.retrieve_softlabel(X)
 
     # print(output)
@@ -364,7 +363,7 @@ def get_soft_label(context_tree, args, X):
         for ctx_index, ctx_dict in enumerate(soft_label_list[0:-1]):
             for vocab_index, vocab_count in ctx_dict.items():
                 y_soft_label[data_index, ctx_index, vocab_index] = vocab_count
-    y_soft_label = F.normalize(y_soft_label, p = 2, dim = 2)
+    y_soft_label = F.normalize(y_soft_label, p = 1, dim = 2)
 
     # print(y_soft_label)
     # print(torch.norm(y_soft_label[0,0,:], p = 2))
@@ -405,7 +404,7 @@ if __name__ == "__main__":
     # Example usage
     dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiText'  # Your saved dataset folder
     vocab_size = 3
-    context_length = 3
+    context_length = 4
     batch_size = 2
 
     args.context_length = context_length
@@ -414,25 +413,47 @@ if __name__ == "__main__":
 
     # Example usage
     custom_data = [1,2,3,2,1,3,1,1,2,1,2,3,1,2,3,1,2,3,1,3,1]
+    custom_data = [0,1,2,1,0,2,0,0,1,0,1,2,0,1,2,0,1,2,0,2,0]
     # custom_data = [1,2,1,3,1,3,2,2]
     step_size = 1
     
 
     dataloader, num_ctx = create_custom_dataloader(custom_data, context_length, batch_size, step_size)
 
-    # dict_counts = {}
-    # for batch in dataloader:
-    #     for x in batch:
-    #         for i in range(1,context_length):
-    #             string = '-'.join(x[0:i].numpy().astype(str).tolist())
-    #             if string in dict_counts.keys():
-    #                 dict_counts[string] += 1
-    #             else:
-    #                 dict_counts[string] = 1
+    dict_counts = {}
+    for batch in dataloader:
+        for x in batch:
+            for i in range(1,context_length+1):
+                string = '-'.join(x[0:i].numpy().astype(str).tolist())
+                if string in dict_counts.keys():
+                    if str(x[i].item()) not in dict_counts[string].keys():
+                        dict_counts[string][str(x[i].item())] = 1
+                    else:   
+                        dict_counts[string][str(x[i].item())] += 1
+                else:
+                    dict_counts[string] = {str(x[i].item()):1}
 
-    # print("dict_counts")
-    # print(dict_counts)
-    # print(len(list(dict_counts.keys())))
+    entropy = 0
+    total_num = 0
+    entropy_dict = {}
+    for index, (ctx, ctx_ctp) in enumerate(dict_counts.items()):
+        entropy_ctx = 0
+        count_ctx = sum(list(ctx_ctp.values()))
+        for _, (ntp, count) in enumerate(ctx_ctp.items()):
+            entropy_ctx -= count / count_ctx * np.log(count / count_ctx)
+        entropy += count_ctx * entropy_ctx
+        total_num += count_ctx
+        
+        entropy_dict[ctx] = entropy_ctx
+    entropy /= total_num
+    entropy_dict = {key:value / total_num for key,value in entropy_dict.items()}
+
+    print("dict_counts:")
+    print(dict_counts)
+    print("num of contexts: " + str(len(list(dict_counts.keys()))))
+    print("entropy: " + str(entropy))
+    print("entropy_dict: " + str(entropy_dict))
+    input()
 
     num_milestones = 10
     memap_filename = f"debug_trie"
@@ -455,33 +476,48 @@ if __name__ == "__main__":
     for batch in dataloader:
         
         # Extract `x` (input) and `y` (target) from the full sequence
-        x_batch = batch[:, :-1]  # Everything except the last token
-        # print(batch[:, 1:].shape)
-        # print(batch[:, 1:])
-        y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
+        # x_batch = batch[:, :-1]  # Everything except the last token
+        # for i in range(0, x_batch.shape[0]):
+        #     for j in range(1, context_length + 1):
+        #         string = '-'.join(x_batch[i,0:j].numpy().astype(str).tolist())
+        #         print(string + ":" + str(dict_counts[string]))
+        
+        # # print(batch[:, 1:].shape)
+        # # print(batch[:, 1:])
+        # y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
         y_soft_label = get_soft_label(context_tree, args, batch).float()
 
-        print(x_batch)
-        print(y_one_hot)
-        print(y_soft_label)
+        x_batch = batch[:, :-1]  # Everything except the last token
+        for i in range(0, x_batch.shape[0]):
+            for j in range(1, context_length + 1):
+                string = '-'.join(x_batch[i,0:j].numpy().astype(str).tolist())
+                print(string + ":" + str(dict_counts[string]))
+                print(y_soft_label[i,j-1,:])
+                input()
+            # print(y_soft_label[i,:,:])
+
+
+        # print(x_batch)
+        # print(y_one_hot)
+        # print(y_soft_label)
         # print(y_soft_label)
         # print(y_soft_label.shape)
 
-        # Count non-zero entries along the last dimension
-        non_zero_counts = (y_soft_label != 0).sum(dim=-1)
+        # # Count non-zero entries along the last dimension
+        # non_zero_counts = (y_soft_label != 0).sum(dim=-1)
 
-        # Check if only one non-zero per example and count them
-        single_non_zero_count = (non_zero_counts == 1).sum()
+        # # Check if only one non-zero per example and count them
+        # single_non_zero_count = (non_zero_counts == 1).sum()
 
-        # input()
-        # print(non_zero_counts)
-        # print(non_zero_counts.shape)
-        # input()
-        # print(single_non_zero_count)
-        # print(single_non_zero_count.shape)
-        # input()
-        count_num_one_hots += single_non_zero_count.item()
-        num_total_samples += batch.shape[0] * batch.shape[1]
+        # # input()
+        # # print(non_zero_counts)
+        # # print(non_zero_counts.shape)
+        # # input()
+        # # print(single_non_zero_count)
+        # # print(single_non_zero_count.shape)
+        # # input()
+        # count_num_one_hots += single_non_zero_count.item()
+        # num_total_samples += batch.shape[0] * batch.shape[1]
 
     print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
 
