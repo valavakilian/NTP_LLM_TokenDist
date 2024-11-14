@@ -64,6 +64,7 @@ import json
 import math
 
 
+
 print("Importing Done")
 
 
@@ -103,6 +104,7 @@ def load_and_tokenize_wikitext(dataset_dir, vocab_size, data_ratio):
     tokenized_data = tokenize_batch(merged_text)
 
     return tokenized_data, tokenizer
+
 
 
 class WikitextShiftedDataset(Dataset):
@@ -458,7 +460,7 @@ if __name__ == "__main__":
     batch_size = args.batch_size
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
-    tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, args.vocab_size, data_ratio = 0.1)
+    tokenized_data, tokenizer = load_and_tokenize_wikitext(dataset_dir, args.vocab_size, data_ratio = 1.0)
     # maxim = 0
     # for t in tokenized_data:
     #     if t > args.vocab_size:
@@ -486,10 +488,6 @@ if __name__ == "__main__":
     # Copy the weights from model_one_hot to model_soft_label
     model_soft_label.load_state_dict(model_one_hot.state_dict())
 
-    model_one_hot = torch.compile(model_one_hot)
-    model_soft_label = torch.compile(model_soft_label)
-
-
     # Move models to GPU if available
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -497,6 +495,11 @@ if __name__ == "__main__":
     if torch.cuda.device_count() > 1:
         model_one_hot = nn.DataParallel(model_one_hot)
         model_soft_label = nn.DataParallel(model_soft_label)
+    
+    
+    # model_one_hot = torch.compile(model_one_hot)
+    # model_soft_label = torch.compile(model_soft_label)
+
         
     model_one_hot.to(device)
     model_soft_label.to(device)
@@ -514,8 +517,6 @@ if __name__ == "__main__":
     dataset_entropy = context_tree.calculate_and_get_entropy_faster()
     print("Entropy Calculated: " + str(dataset_entropy))
     # dataset_entropy = 0
-
-
 
 
     # Optimizers for each model
@@ -559,38 +560,24 @@ if __name__ == "__main__":
 
         num_datapoints = 0
 
+
+        norm_soft_vs_hard_diff = 0
+
         batch_idx = 0
         # Training loop for the first model on dataset1
-        for batch in tqdm(dataloader):
-
-            # # Warmup learning rate during first epoch
-            # if epoch == 0:
-            #     current_step = batch_idx + 1
-            #     # Linear warmup
-            #     current_lr = get_warmup_lr(initial_lr_one_hot, current_step, warmup_steps)
-            #     for param_group in optimizer_one_hot.param_groups:
-            #         param_group['lr'] = current_lr
-            #     for param_group in optimizer_soft_label.param_groups:
-            #         param_group['lr'] = current_lr
-            #     batch_idx += 1
+        for batch in tqdm(dataloader):  
             
             # Extract `x` (input) and `y` (target) from the full sequence
             x_batch = batch[:, :-1]  # Everything except the last token
-            # print(batch[:, 1:].shape)
-            # print(batch[:, 1:])
             y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).to(device).float()  # Assuming vocab_size is defined
             y_soft_label = get_soft_label(context_tree, args, batch).float()
-            # y_soft_label = y_one_hot
-            # print(y_one_hot.shape)
-            # print(y_soft_label.shape)
-            # print(y_one_hot[0,0,:])
-            # print(y_soft_label[0,0,:])
-            # print(torch.sum(y_one_hot[0,0,:]))
-            # print(torch.sum(y_soft_label[0,0,:]))
-            # input()
+ 
 
             # `batch` contains the full sequence [x || y]
             x_batch, y_one_hot, y_soft_label = x_batch.to(device), y_one_hot.to(device), y_soft_label.to(device)
+
+            # norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
+            # norm_soft_vs_hard_diff += norms.sum()
 
             # print("One hot:", y_one_hot[0,0,:].sum(), y_one_hot[0,0,:].max())
             # print("Soft label:", y_soft_label[0,0,:].sum(), y_soft_label[0,0,:].max())
@@ -598,23 +585,10 @@ if __name__ == "__main__":
             
             
             # Forward pass for one hot model
-            outputs = model_one_hot(x_batch)
-            pred_logits = outputs.logits
-            log_probs = F.log_softmax(pred_logits, dim=-1)
-            loss = -(y_one_hot * log_probs).sum()
-            # pred_logits = F.softmax(pred_logits, dim=-1)
-            # print(y_one_hot[0,:,0:10])
-            # print(pred_logits.shape)
-            # print(y_one_hot.shape)
-            # input()
-            # pred_flat = pred_logits.view(-1, args.vocab_size)
-            # target_flat = y_one_hot.view(-1, args.vocab_size)
-            # loss = loss_fn(pred_flat, target_flat)
-            # loss = loss_fn(pred_logits, y_one_hot) #/ (x_batch.shape[0])
-            # print(pred_flat.shape)
-            # print(target_flat.shape)
-            # print(pred_logits.shape)
-            # Backward pass and optimization for one hot model
+            outputs_one_hot = model_one_hot(x_batch)
+            pred_logits_one_hot = outputs_one_hot.logits
+            log_probs_one_hot = F.log_softmax(pred_logits_one_hot, dim=-1)
+            loss = -(y_one_hot * log_probs_one_hot).sum()
             optimizer_one_hot.zero_grad()
             loss.backward()
             optimizer_one_hot.step()
@@ -623,33 +597,32 @@ if __name__ == "__main__":
             
 
             # Forward pass for soft label model
-            outputs = model_soft_label(x_batch)
-            pred_logits = outputs.logits
-            # pred_logits = F.softmax(pred_logits, dim=-1)
-            # pred_flat = pred_logits.view(-1, args.vocab_size)
-            # target_flat = y_soft_label.view(-1, args.vocab_size)
-            # loss = loss_fn(pred_flat, target_flat)
-            # loss = loss_fn(pred_logits, y_soft_label) #/ ( x_batch.shape[0])
-            # Backward pass and optimization for soft label model
-            # print(pred_flat.shape)
-            # print(target_flat.shape)
-            log_probs = F.log_softmax(pred_logits, dim=-1)
-            loss = -(y_soft_label * log_probs).sum()
+            outputs_soft_label = model_soft_label(x_batch)
+            pred_logits_soft_label = outputs_soft_label.logits
+            log_probs_soft_label = F.log_softmax(pred_logits_soft_label, dim=-1)
+            loss = -(y_soft_label * log_probs_soft_label).sum()
             optimizer_soft_label.zero_grad()
             loss.backward()
             optimizer_soft_label.step()
             total_loss_soft_label += loss.item() #* ( x_batch.shape[0])
             loss = 0
 
+
+            del pred_logits_soft_label
+            del pred_logits_one_hot
+
+            batch_idx += 1
             num_datapoints += x_batch.shape[0]
             # input()
 
             del x_batch
             del y_one_hot
             del y_soft_label
-            del pred_logits
-            # del pred_flat
-            # del target_flat
+        
+
+        # print("_" * 100)
+        # print("norm_soft_vs_hard_diff: " + str(norm_soft_vs_hard_diff / (num_datapoints * args.context_length)))
+        # print("_" * 100)
 
 
         loss_one_hot_list.append(total_loss_one_hot / (num_datapoints * args.context_length))

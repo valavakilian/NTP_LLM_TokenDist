@@ -297,7 +297,7 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
         # else:
         print("Tree is new. Constructing ...")
         up_to_ctx_count_processed = 0
-        context_tree = trie_module_protV1_lib.Trie_module_protV1(memap_filename, 50, args.context_length)
+        context_tree = trie_module_protV1_lib.Trie_module_protV1(memap_filename, 200, args.context_length)
 
         data_log = {
             "entropy": {},

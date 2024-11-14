@@ -471,53 +471,74 @@ if __name__ == "__main__":
 
     
     count_num_one_hots = 0
-    num_total_samples = 0
-    # Training loop for the first model on dataset1
-    for batch in dataloader:
+    
+    for i in range(0, 10):
+        norm_soft_vs_hard_diff = 0
+        num_total_samples = 0
+
+        # Training loop for the first model on dataset1
+        for batch in dataloader:
+            
+            # Extract `x` (input) and `y` (target) from the full sequence
+            # x_batch = batch[:, :-1]  # Everything except the last token
+            # for i in range(0, x_batch.shape[0]):
+            #     for j in range(1, context_length + 1):
+            #         string = '-'.join(x_batch[i,0:j].numpy().astype(str).tolist())
+            #         print(string + ":" + str(dict_counts[string]))
+            
+            # # print(batch[:, 1:].shape)
+            # # print(batch[:, 1:])
+            y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
+            y_soft_label = get_soft_label(context_tree, args, batch).float()
+            print("y_soft_label: " + str(y_soft_label))
+            # y_soft_label = get_soft_label(context_tree, args, batch).float()
+            # print("y_soft_label: " + str(y_soft_label))
+
+            
+
+            x_batch = batch[:, :-1]  # Everything except the last token
+            # for i in range(0, x_batch.shape[0]):
+            #     for j in range(1, context_length + 1):
+            #         string = '-'.join(x_batch[i,0:j].numpy().astype(str).tolist())
+            #         print(string + ":" + str(dict_counts[string]))
+            #         print(y_soft_label[i,j-1,:])
+            #         input()
+                # print(y_soft_label[i,:,:])
+
+            norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
+            norm_soft_vs_hard_diff += norms.sum()
+
+            print(norms.sum())
+
+
+            # print(x_batch)
+            # print(y_one_hot)
+            # print(y_soft_label)
+            # print(y_soft_label)
+            # print(y_soft_label.shape)
+
+            # # Count non-zero entries along the last dimension
+            # non_zero_counts = (y_soft_label != 0).sum(dim=-1)
+
+            # # Check if only one non-zero per example and count them
+            # single_non_zero_count = (non_zero_counts == 1).sum()
+
+            # # input()
+            # # print(non_zero_counts)
+            # # print(non_zero_counts.shape)
+            # # input()
+            # # print(single_non_zero_count)
+            # # print(single_non_zero_count.shape)
+            # # input()
+            # count_num_one_hots += single_non_zero_count.item()
+            num_total_samples += batch.shape[0] * batch.shape[1]
         
-        # Extract `x` (input) and `y` (target) from the full sequence
-        # x_batch = batch[:, :-1]  # Everything except the last token
-        # for i in range(0, x_batch.shape[0]):
-        #     for j in range(1, context_length + 1):
-        #         string = '-'.join(x_batch[i,0:j].numpy().astype(str).tolist())
-        #         print(string + ":" + str(dict_counts[string]))
-        
-        # # print(batch[:, 1:].shape)
-        # # print(batch[:, 1:])
-        # y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
-        y_soft_label = get_soft_label(context_tree, args, batch).float()
+        print("_" * 100)
+        print("num_total_samples: " + str(num_total_samples))
+        print("norm_soft_vs_hard_diff: " + str(norm_soft_vs_hard_diff / (num_total_samples)))
+        print("_" * 100)
+        input()
 
-        x_batch = batch[:, :-1]  # Everything except the last token
-        for i in range(0, x_batch.shape[0]):
-            for j in range(1, context_length + 1):
-                string = '-'.join(x_batch[i,0:j].numpy().astype(str).tolist())
-                print(string + ":" + str(dict_counts[string]))
-                print(y_soft_label[i,j-1,:])
-                input()
-            # print(y_soft_label[i,:,:])
-
-
-        # print(x_batch)
-        # print(y_one_hot)
-        # print(y_soft_label)
-        # print(y_soft_label)
-        # print(y_soft_label.shape)
-
-        # # Count non-zero entries along the last dimension
-        # non_zero_counts = (y_soft_label != 0).sum(dim=-1)
-
-        # # Check if only one non-zero per example and count them
-        # single_non_zero_count = (non_zero_counts == 1).sum()
-
-        # # input()
-        # # print(non_zero_counts)
-        # # print(non_zero_counts.shape)
-        # # input()
-        # # print(single_non_zero_count)
-        # # print(single_non_zero_count.shape)
-        # # input()
-        # count_num_one_hots += single_non_zero_count.item()
-        # num_total_samples += batch.shape[0] * batch.shape[1]
 
     print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
 

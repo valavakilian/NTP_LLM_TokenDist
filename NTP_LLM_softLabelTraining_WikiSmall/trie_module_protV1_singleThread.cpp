@@ -172,7 +172,7 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
                                
-    const size_t array_size = 200000000; // Size of the array
+    const size_t array_size = 500000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -180,7 +180,7 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
                                        
-    const size_t size_logcalc_memory = 200000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 500000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
     std::vector<double> logcalc_memory_entropy;
 
@@ -746,46 +746,19 @@ public:
         
         return distributions;
     }
-    
+
+
     py::list retrieve_softlabel(const torch::Tensor& tensor) {
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
 
-        const int num_threads = 128;  // Number of threads in the pool. Adjust as needed.
-        const int batch_size = std::max(1, static_cast<int>(tensor.size(0) / num_threads));
-
         std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(tensor.size(0));
-
-        // Create a thread pool
-        std::vector<std::thread> thread_pool;
-        std::atomic<int> next_batch(0);
-        std::atomic<bool> done(false);
-
-        auto worker = [this, &tensor, &next_batch, &done, batch_size, &soft_label_distributions]() {
-            while (!done) {
-                int start = next_batch.fetch_add(batch_size);
-                if (start >= tensor.size(0)) {
-                    break;
-                }
-                int end = std::min(static_cast<int>(tensor.size(0)), start + batch_size);
-                for (int col = start; col < end; col++) {
-                    soft_label_distributions[col] = this->retrieve_context_softlabel(tensor, col);
-                }
-            }
-        };
-
-        // Start the worker threads
-        for (int i = 0; i < num_threads; i++) {
-            thread_pool.emplace_back(worker);
+        
+        // Process all columns sequentially in a single thread
+        for (int col = 0; col < tensor.size(0); col++) {
+            soft_label_distributions[col] = this->retrieve_context_softlabel(tensor, col);
         }
-
-        // Wait for all threads to complete
-        done = true;
-        for (auto& thread : thread_pool) {
-            thread.join();
-        }
-
 
         // Convert the results to Python list
         py::list soft_label_list;
@@ -801,9 +774,66 @@ public:
             soft_label_list.append(seq_result);
         }
 
-        // return 1;  // Indicating we're not running out of memory
         return soft_label_list;
     }
+    
+    // py::list retrieve_softlabel(const torch::Tensor& tensor) {
+    //     // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
+    //     TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
+    //     TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
+
+    //     const int num_threads = 128;  // Number of threads in the pool. Adjust as needed.
+    //     const int batch_size = std::max(1, static_cast<int>(tensor.size(0) / num_threads));
+
+    //     std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(tensor.size(0));
+
+    //     // Create a thread pool
+    //     std::vector<std::thread> thread_pool;
+    //     std::atomic<int> next_batch(0);
+    //     std::atomic<bool> done(false);
+
+    //     auto worker = [this, &tensor, &next_batch, &done, batch_size, &soft_label_distributions]() {
+    //         while (!done) {
+    //             int start = next_batch.fetch_add(batch_size);
+    //             if (start >= tensor.size(0)) {
+    //                 break;
+    //             }
+    //             int end = std::min(static_cast<int>(tensor.size(0)), start + batch_size);
+    //             for (int col = start; col < end; col++) {
+    //                 soft_label_distributions[col] = this->retrieve_context_softlabel(tensor, col);
+    //             }
+    //         }
+    //     };
+
+    //     // Start the worker threads
+    //     for (int i = 0; i < num_threads; i++) {
+    //         thread_pool.emplace_back(worker);
+    //     }
+
+    //     // Wait for all threads to complete
+    //     done = true;
+    //     for (auto& thread : thread_pool) {
+    //         thread.join();
+    //     }
+
+
+    //     // Convert the results to Python list
+    //     py::list soft_label_list;
+    //     for (const auto& seq_distributions : soft_label_distributions) {
+    //         py::list seq_result;
+    //         for (const auto& dist : seq_distributions) {
+    //             py::dict py_dist;
+    //             for (const auto& [token, prob] : dist) {
+    //                 py_dist[py::int_(token)] = py::float_(prob);
+    //             }
+    //             seq_result.append(py_dist);
+    //         }
+    //         soft_label_list.append(seq_result);
+    //     }
+
+    //     // return 1;  // Indicating we're not running out of memory
+    //     return soft_label_list;
+    // }
 
 
     std::unordered_map<std::vector<int64_t>, int64_t> collect_all_sequences() {
