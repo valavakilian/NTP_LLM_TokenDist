@@ -173,8 +173,9 @@ private:
     std::map<int64_t, int> num_total_contexts_per_level;
 
     std::map<int64_t, double> entropy_per_level;
+    std::map<int64_t, double> count_per_level;
                                
-    const size_t array_size = 500000000; // Size of the array
+    const size_t array_size = 2000000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -183,7 +184,7 @@ private:
     MemMapArray<int> ctxCount_array;
     MemMapArray<double> softLabelDiff_array;
                                        
-    const size_t size_logcalc_memory = 500000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 2000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
     std::vector<double> logcalc_memory_entropy;
 
@@ -877,6 +878,10 @@ public:
             pair.second = 0;  // Set the count to zero for each level
         }
 
+        for (auto& pair : count_per_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+
         int64_t total_counter = 0;
         int counter = 0;
         DEBUG_PRINT(node_counter);
@@ -894,9 +899,11 @@ public:
             }
             num_unique_contexts_per_level[ctxLen_array[j]] += 1;
             entropy_per_level[ctxLen_array[j]] += entropy_temp;
+            
             total_entropy += entropy_temp;
 
             total_counter += ctxCount_array[j];
+            count_per_level[ctxLen_array[j]] += ctxCount_array[j];
 
             total_softLabelDiff += ctxCount_array[j] * softLabelDiff_array[j];
 
@@ -919,7 +926,7 @@ public:
 
         total_entropy = -total_entropy / total_counter;
         for(int t = 0; t < context_length; t++){
-            entropy_per_level[t] /= -total_counter;
+            entropy_per_level[t] /= -count_per_level[t];
         }
 
         total_softLabelDiff /= total_counter;
