@@ -616,9 +616,9 @@ public:
         int batch_size = tensor.size(0);
         int chunk_size = std::max(1, batch_size / num_threads);
 
-        DEBUG_PRINT("Running with " << num_threads << " threads");
-        DEBUG_PRINT("Total batch size: " << batch_size);
-        DEBUG_PRINT("Chunk size per thread: " << chunk_size);
+        // DEBUG_PRINT("Running with " << num_threads << " threads");
+        // DEBUG_PRINT("Total batch size: " << batch_size);
+        // DEBUG_PRINT("Chunk size per thread: " << chunk_size);
 
         std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(batch_size);
         

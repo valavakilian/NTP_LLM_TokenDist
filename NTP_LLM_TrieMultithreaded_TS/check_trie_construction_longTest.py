@@ -328,6 +328,25 @@ def get_soft_label(context_tree, args, X):
 
     return y_soft_label
 
+
+
+def heavy_tail_prob_dist(n, alpha=0.5):
+    """
+    Generate a heavy-tailed probability distribution for a given length.
+    
+    Args:
+        n (int): Number of elements.
+        alpha (float): Parameter controlling the heaviness of the tail. Higher means less heavy.
+        
+    Returns:
+        numpy.ndarray: Probability distribution summing to 1.
+    """
+    # Generate weights using a power-law distribution
+    weights = np.arange(1, n + 1, dtype=np.float64) ** -alpha
+    # Normalize to create probabilities
+    prob_dist = weights / np.sum(weights)
+    return prob_dist
+
 if __name__ == "__main__":
     """
     These stages are designed to be run in order.
@@ -354,15 +373,14 @@ if __name__ == "__main__":
     args.context_length = context_lenghts[args.exp_case // len(vocab_sizes)]
     args.step_size = args.context_length // 2
     num_epochs = 90
-
-    print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
     
 
     # Example usage
     dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiText'  # Your saved dataset folder
-    vocab_size = 4
+    vocab_size = 100
     context_length = 32
     batch_size = 512
+    print("Running experiments for Vocab Size " + str(vocab_size) + " with Context Lenght " + str(context_length))
 
     args.context_length = context_length
     args.vocab_size = vocab_size
@@ -372,12 +390,16 @@ if __name__ == "__main__":
     # custom_data = [1,2,3,2,1,3,1,1,2,1,2,3,1,2,3,1,2,3,1,3,1]
     # custom_data = [0,1,2,1,0,2,0,0,1,0,1,2,0,1,2,0,1,2,0,2,0]
     # custom_data = [1,2,1,3,1,3,2,2]
+    vocabs = [i for i in range(0,vocab_size)]
+    prob_dist = heavy_tail_prob_dist(vocab_size, 1)
     sequence_range = 10000
-    custom_data = [random.choice([i for i in range(0,vocab_size)]) for _ in range(sequence_range)]  # Replace 10 with your desired length
+    
+    custom_data = [np.random.choice(vocabs, p=prob_dist) for _ in range(sequence_range)]  # Replace 10 with your desired length
     step_size = 1
     
 
     dataloader, num_ctx = create_custom_dataloader(custom_data, context_length, batch_size, step_size)
+    print("dataset created")
 
     dict_counts = {}
     for batch in dataloader:
@@ -426,7 +448,7 @@ if __name__ == "__main__":
     dataset_entropy = context_tree.calculate_and_get_entropy_faster()
     print("Entropy Calculated: " + str(dataset_entropy))
     print("+++++++++++++++++++++++++++++++++++++++++++++++++++++")
-    input()
+    # input()
 
     print("Analyzing Data ... ")
     # Manual training loop
@@ -467,7 +489,7 @@ if __name__ == "__main__":
                     print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
                     print("soft_label python: " + str(prob_vector))
                     print("_______________________________________________________________________")
-                    input()
+                    # input()
         
 
         # print("_" * 100)
