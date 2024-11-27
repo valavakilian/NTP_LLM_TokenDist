@@ -1,36 +1,36 @@
 """
 Download, preprocess and serve the WikiText dataset as a DataLoader.
 """
-print("I AMJGSAUIHSABJK")
+
 
 import argparse
-print("I AMJGSAUIHSABJK")
+
 
 import glob
-print("I AMJGSAUIHSABJK")
+
 
 import json
-print("I AMJGSAUIHSABJK")
+
 
 import os
-print("I AMJGSAUIHSABJK")
+
 
 import random
-print("I AMJGSAUIHSABJK")
+
 
 from typing import List
-print("I AMJGSAUIHSABJK")
+
 
 import numpy as np
 import requests
-print("I AMJGSAUIHSABJK")
+
 
 import sentencepiece as spm
-print("I AMJGSAUIHSABJK")
+
 import torch
-print("I AMJGSAUIHSABJK")
+
 import torch.distributed as dist
-print("I AMJGSAUIHSABJK")
+
 from tqdm import tqdm
 
 from random import shuffle
@@ -391,7 +391,7 @@ if __name__ == "__main__":
     args.context_length = context_lenghts[args.exp_case // len(vocab_sizes)]
     args.step_size = args.context_length // 2
     num_epochs = 90
-    print("I AMJGSAUIHSABJK")
+    
 
     
 
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     context_length = 32
     batch_size = 512
     print("Running experiments for Vocab Size " + str(vocab_size) + " with Context Lenght " + str(context_length))
-    print("I AMJGSAUIHSABJK")
+    
 
 
     args.context_length = context_length
@@ -418,12 +418,12 @@ if __name__ == "__main__":
     
     custom_data = [np.random.choice(vocabs, p=prob_dist) for _ in range(sequence_range)]  # Replace 10 with your desired length
     step_size = 1
-    print("I AMJGSAUIHSABJK")
+    
 
     
 
     dataloader, num_ctx = create_custom_dataloader(custom_data, context_length, batch_size, step_size)
-    print("I AMJGSAUIHSABJK")
+    
 
 
     dict_counts = {}
@@ -480,52 +480,52 @@ if __name__ == "__main__":
     num_datapoints = 0
 
     
-#     count_num_one_hots = 0
+    count_num_one_hots = 0
     
-#     norm_soft_vs_hard_diff = 0
-#     num_total_samples = 0
+    norm_soft_vs_hard_diff = 0
+    num_total_samples = 0
 
-#     # Training loop for the first model on dataset1
-#     for batch in tqdm(dataloader):
+    # Training loop for the first model on dataset1
+    for batch in tqdm(dataloader):
 
-#         y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
-#         y_soft_label = get_soft_label(context_tree, args, batch).float()
+        y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
+        y_soft_label = get_soft_label(context_tree, args, batch).float()
 
-#         x_batch = batch[:, :-1]  # Everything except the last token
-#         norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
-#         norm_soft_vs_hard_diff += norms.sum()
-#         num_total_samples += batch.shape[0] * batch.shape[1]
+        x_batch = batch[:, :-1]  # Everything except the last token
+        norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
+        norm_soft_vs_hard_diff += norms.sum()
+        num_total_samples += batch.shape[0] * batch.shape[1]
 
-#         for i in range(0, batch.shape[0]):
-#             for context_index in range(1,batch.shape[1]):
-#                 string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
+        for i in range(0, batch.shape[0]):
+            for context_index in range(1,batch.shape[1]):
+                string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
                 
-#                 prob_vector_trie = y_soft_label[i,context_index-1]
-#                 # Step 1: Extract values as a tensor
-#                 counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
-#                 # Step 2: Normalize to create a probability vector
-#                 prob_vector = counts / counts.sum()
+                prob_vector_trie = y_soft_label[i,context_index-1]
+                # Step 1: Extract values as a tensor
+                counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
+                # Step 2: Normalize to create a probability vector
+                prob_vector = counts / counts.sum()
 
-#                 # print(y_soft_label[i,context_index-1])
-#                 # print(prob_vector)
-#                 if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
-#                     print("Following context are incorrrectly calculated with the Trie.")
-#                     print("Context: " + str(string))
-#                     print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
-#                     print("soft_label python: " + str(prob_vector))
-#                     print("_______________________________________________________________________")
-#                     # input()
+                # print(y_soft_label[i,context_index-1])
+                # print(prob_vector)
+                if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
+                    print("Following context are incorrrectly calculated with the Trie.")
+                    print("Context: " + str(string))
+                    print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
+                    print("soft_label python: " + str(prob_vector))
+                    print("_______________________________________________________________________")
+                    # input()
         
 
-#         # print("_" * 100)
-#         # print("num_total_samples: " + str(num_total_samples))
-#         # print("norm_soft_vs_hard_diff: " + str(norm_soft_vs_hard_diff / (num_total_samples)))
-#         # print("_" * 100)
-#         # input()
+        # print("_" * 100)
+        # print("num_total_samples: " + str(num_total_samples))
+        # print("norm_soft_vs_hard_diff: " + str(norm_soft_vs_hard_diff / (num_total_samples)))
+        # print("_" * 100)
+        # input()
 
 
-#     print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
+    print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
 
-#     print("Training complete!")
+    print("Training complete!")
 
 

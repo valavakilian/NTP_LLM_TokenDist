@@ -183,7 +183,7 @@ private:
     std::map<int64_t, double> entropy_per_level;
     std::map<int64_t, double> count_per_level;
                                
-    const size_t array_size = 200000000; // Size of the array
+    const size_t array_size = 20000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -191,7 +191,7 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
                                        
-    const size_t size_logcalc_memory = 200000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 20000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
     std::vector<double> logcalc_memory_entropy;
 
@@ -408,65 +408,145 @@ public:
     }
 
     // Constructor to load an existing Trie from a file
+    // Constructor to load an existing Trie from a file
     Trie_module_protV1(const std::string& fname) : 
-    filename(fname + ".bin"), countLog_array(fname + "_countLog_arr.dat"), 
-    ctxLen_array(fname + "_ctxLen_arr.dat"), ctxCount_array(fname + "_ctxCount_arr.dat")
-    , logcalc_memory_insert(size_logcalc_memory, -1), logcalc_memory_entropy(size_logcalc_memory, -1), mutex_array_lock(array_size){
+        filename(fname + ".bin"), 
+        countLog_array(fname + "_countLog_arr.dat"), 
+        ctxLen_array(fname + "_ctxLen_arr.dat"), 
+        ctxCount_array(fname + "_ctxCount_arr.dat"),
+        logcalc_memory_insert(size_logcalc_memory, -1), 
+        logcalc_memory_entropy(size_logcalc_memory, -1), 
+        mutex_array_lock(array_size) {
+        
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
         if (fd == -1) {
-            perror("Error opening file");
-            exit(EXIT_FAILURE);
+            throw std::runtime_error("Error opening trie file: " + std::string(strerror(errno)));
         }
 
         // Step 2: Get the size of the file
         struct stat fileInfo;
         if (fstat(fd, &fileInfo) == -1) {
-            perror("Error getting file size");
-            exit(EXIT_FAILURE);
+            close(fd);
+            throw std::runtime_error("Error getting file size: " + std::string(strerror(errno)));
         }
         allocated_size = fileInfo.st_size;
 
-        std::cout << "Memory-mapped file size: " << allocated_size / pow(1024, 3) << " Giga bytes" << std::endl;
+        std::cout << "Loading memory-mapped file size: " << allocated_size / (1024.0 * 1024.0 * 1024.0) << " GB" << std::endl;
 
         // Step 3: Memory-map the file
         mapped_memory = (char*) mmap(nullptr, allocated_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (mapped_memory == MAP_FAILED) {
-            perror("Error mmapping the file");
-            exit(EXIT_FAILURE);
+            close(fd);
+            throw std::runtime_error("Error memory mapping the file: " + std::string(strerror(errno)));
         }
 
         metadata_filename = filename + "_metadata.bin";
 
-        // Step 4: Set the root node to the start of the mapped file memory
-        TrieNode* root = reinterpret_cast<TrieNode*>(mapped_memory);
+        // Step 4: Load metadata and initialize all required arrays
+        try {
+            load_metadata(metadata_filename);
+            
+            // Initialize arrays with loaded data
+            num_unique_contexts_per_level.clear();
+            num_total_contexts_per_level.clear();
+            entropy_per_level.clear();
+            count_per_level.clear();
 
-        load_metadata(metadata_filename);
+            // Load the arrays from their respective files
+            std::ifstream per_level_data(fname + "_level_data.bin", std::ios::binary);
+            if (per_level_data.is_open()) {
+                size_t num_levels;
+                per_level_data.read(reinterpret_cast<char*>(&num_levels), sizeof(size_t));
+                
+                for (size_t i = 0; i < num_levels; i++) {
+                    int64_t level;
+                    int unique_count, total_count;
+                    double entropy, count;
+                    
+                    per_level_data.read(reinterpret_cast<char*>(&level), sizeof(int64_t));
+                    per_level_data.read(reinterpret_cast<char*>(&unique_count), sizeof(int));
+                    per_level_data.read(reinterpret_cast<char*>(&total_count), sizeof(int));
+                    per_level_data.read(reinterpret_cast<char*>(&entropy), sizeof(double));
+                    per_level_data.read(reinterpret_cast<char*>(&count), sizeof(double));
+                    
+                    num_unique_contexts_per_level[level] = unique_count;
+                    num_total_contexts_per_level[level] = total_count;
+                    entropy_per_level[level] = entropy;
+                    count_per_level[level] = count;
+                }
+                per_level_data.close();
+            }
 
+            // Note: countLog_array, ctxLen_array, and ctxCount_array are already loaded
+            // through the MemMapArray constructors in the initialization list
+
+            std::cout << "Successfully loaded Trie with following statistics:" << std::endl;
+            std::cout << "Number of unique contexts: " << num_unique_contexts.load() << std::endl;
+            std::cout << "Number of total contexts: " << num_total_contexts.load() << std::endl;
+            std::cout << "Context length: " << context_length << std::endl;
+            std::cout << "Node counter: " << node_counter.load() << std::endl;
+            
+        } catch (const std::exception& e) {
+            if (mapped_memory != MAP_FAILED) {
+                munmap(mapped_memory, allocated_size);
+            }
+            close(fd);
+            throw std::runtime_error("Error loading metadata: " + std::string(e.what()));
+        }
     }
 
     void save_metadata() {
+        // Save main metadata
         std::ofstream file(metadata_filename);
-        if (file.is_open()) {
-            file << file_size << "\n";
-            file << allocated_size << "\n";
-            file << num_unique_contexts.load() << "\n";
-            file << num_total_contexts.load() << "\n";
-            file << context_length << "\n";
-            file << node_counter << "\n";
-            file << node_mutex_counter << "\n";
-
-            for (const auto& [level, count] : num_unique_contexts_per_level) {
-                file << "level " << level << " " << count << "\n";
-            }
-            file.close();
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open metadata file for writing");
         }
+
+        file << file_size << "\n";
+        file << allocated_size << "\n";
+        file << num_unique_contexts.load() << "\n";
+        file << num_total_contexts.load() << "\n";
+        file << context_length << "\n";
+        file << node_counter << "\n";
+        file << node_mutex_counter << "\n";
+
+        // Save the level-specific data
+        for (const auto& [level, count] : num_unique_contexts_per_level) {
+            file << "level " << level << " " << count << "\n";
+        }
+        file.close();
+
+        // Save additional array data in binary format
+        std::ofstream per_level_data(filename.substr(0, filename.length() - 4) + "_level_data.bin", 
+                                    std::ios::binary);
+        if (!per_level_data.is_open()) {
+            throw std::runtime_error("Failed to open level data file for writing");
+        }
+
+        // Write number of levels
+        size_t num_levels = num_unique_contexts_per_level.size();
+        per_level_data.write(reinterpret_cast<const char*>(&num_levels), sizeof(size_t));
+
+        // Write all level-specific data
+        for (const auto& [level, _] : num_unique_contexts_per_level) {
+            per_level_data.write(reinterpret_cast<const char*>(&level), sizeof(int64_t));
+            int unique_count = num_unique_contexts_per_level[level];
+            int total_count = num_total_contexts_per_level[level];
+            double entropy = entropy_per_level[level];
+            double count = count_per_level[level];
+            
+            per_level_data.write(reinterpret_cast<const char*>(&unique_count), sizeof(int));
+            per_level_data.write(reinterpret_cast<const char*>(&total_count), sizeof(int));
+            per_level_data.write(reinterpret_cast<const char*>(&entropy), sizeof(double));
+            per_level_data.write(reinterpret_cast<const char*>(&count), sizeof(double));
+        }
+        per_level_data.close();
 
         std::cout << "----Saver----" << std::endl;
         std::cout << "Metadata saved to " << metadata_filename << std::endl;
-        std::cout << "Memory-mapped file size: " << file_size << " Giga bytes" << std::endl;
-        std::cout << "Memory-mapped allocated size: " << allocated_size << " Giga bytes" << std::endl;
-
+        std::cout << "Memory-mapped file size: " << file_size / (1024.0 * 1024.0 * 1024.0) << " GB" << std::endl;
+        std::cout << "Memory-mapped allocated size: " << allocated_size / (1024.0 * 1024.0 * 1024.0) << " GB" << std::endl;
     }
 
     void load_metadata(const std::string& metadata_filename) {
@@ -782,12 +862,18 @@ public:
             pair.second = 0;  // Set the count to zero for each level
         }
 
+        double number_of_oneHots = 0;
+
         int64_t total_counter = 0;
         int counter = 0;
         DEBUG_PRINT(node_counter);
         DEBUG_PRINT("Printing entropy: ");
         for(int j = 1; j <= node_counter; j++){
             entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
+
+            if (entropy_temp == 0.0){
+                number_of_oneHots += 1;
+            }
 
             // DEBUG_PRINT(ctxCount_array[j]);
             if (ctxCount_array[j] == 0){
@@ -805,18 +891,8 @@ public:
             total_counter += ctxCount_array[j];
             count_per_level[ctxLen_array[j]] += ctxCount_array[j];
 
-            // std::cout << entropy_temp << ", ";
         }  
-        // std::cout << "\n";
 
-        // for(int j = 1; j < node_counter; j++){
-        //     entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
-        //     entropy_temp /= total_counter;
-        //     DEBUG_PRINT("__________________________________________________________");
-        //     DEBUG_PRINT("Counter: " << j );
-        //     DEBUG_PRINT("entropy_temp: " << entropy_temp );
-        //     DEBUG_PRINT("Count: " << ctxCount_array[j]);
-        // }  
 
         DEBUG_PRINT("total_entropy: " << total_entropy);
         DEBUG_PRINT("total_counter: " << total_counter);
@@ -825,6 +901,11 @@ public:
         for(int t = 0; t < context_length; t++){
             entropy_per_level[t] /= -count_per_level[t];
         }
+
+        double perc_of_oneHots = number_of_oneHots / node_counter;
+        DEBUG_PRINT("Percentage of OneHots is: " << perc_of_oneHots);
+        DEBUG_PRINT("number_of_oneHots: " << number_of_oneHots);
+        DEBUG_PRINT("node_counter: " << node_counter);
 
         num_unique_contexts = node_counter.load();
         

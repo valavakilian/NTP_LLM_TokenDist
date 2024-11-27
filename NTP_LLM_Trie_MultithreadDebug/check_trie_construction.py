@@ -468,7 +468,6 @@ if __name__ == "__main__":
         print("num_total_samples: " + str(num_total_samples))
         print("norm_soft_vs_hard_diff: " + str(norm_soft_vs_hard_diff / (num_total_samples)))
         print("_" * 100)
-        input()
 
 
     print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))

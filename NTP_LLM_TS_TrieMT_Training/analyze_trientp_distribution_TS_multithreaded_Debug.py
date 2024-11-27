@@ -539,6 +539,9 @@ if __name__ == "__main__":
     dataset_entropy = context_tree_ST.calculate_and_get_entropy_faster()
     print("ST Entropy Calculated: " + str(dataset_entropy))
 
+
+    context_tree_MT
+
     
     print("Training complete!")
 

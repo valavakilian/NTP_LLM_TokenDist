@@ -41,8 +41,6 @@ import trie_module_protV1_lib_multithreaded
 # import trie_module_protV1_lib
 
 import numpy as np
-
-print("WE ARE HERE")
 from datasets import load_from_disk
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 from torch.utils.data import Dataset, DataLoader
@@ -65,6 +63,9 @@ import os
 import struct
 import json
 import math
+
+from torch.optim import SGD
+
 
 
 # from TS_loader import *
@@ -269,7 +270,14 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
     # print(memap_filename_ST)
     # input()
     print(memap_filename_MT)
-    context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 200, args.context_length)
+
+    if os.path.exists(memap_filename_MT + ".bin") and args.LoadTrieFromFile:
+        print("Trie fiel exists! Loading from file.")
+        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT)
+        return context_tree_MT
+    else:
+        print("File does not exist or forced to Trie recreation requested.")
+        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 200, args.context_length)
 
 
 
@@ -411,6 +419,7 @@ if __name__ == "__main__":
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")
+    parser.add_argument("--LoadTrieFromFile", type=bool, default=True, help="Load from existing file")
     args = parser.parse_args()
 
     # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
@@ -470,9 +479,9 @@ if __name__ == "__main__":
     model_config = GPT2Config(
         vocab_size=args.vocab_size,
         n_positions=args.context_length,
-        n_embd=512,
+        n_embd=1024,
         n_layer=12,
-        n_head=4,
+        n_head=8,
     )
 
     
@@ -526,9 +535,45 @@ if __name__ == "__main__":
     # dataset_entropy = 0
 
 
+
+    # Warmup parameters
+    warmup_epochs = 5  # Number of epochs for warmup
+    initial_lr = 4e-4  # Initial learning rate for warmup
+    target_lr = 4e-4   # Target learning rate after warmup
+
+    # Setup the scheduler based on selection
+    def get_lr_multiplier(epoch):
+        if epoch < warmup_epochs:
+            # Linear warmup
+            return initial_lr + (target_lr - initial_lr) * epoch / warmup_epochs
+        return target_lr
+    
+
+    # Custom scheduler with warmup
+    class WarmupScheduler:
+        def __init__(self, optimizer, base_scheduler, warmup_epochs, get_lr_multiplier):
+            self.optimizer = optimizer
+            self.base_scheduler = base_scheduler
+            self.warmup_epochs = warmup_epochs
+            self.get_lr_multiplier = get_lr_multiplier
+            self.current_epoch = 0
+            
+        def step(self):
+            self.current_epoch += 1
+            if self.current_epoch <= self.warmup_epochs:
+                lr = self.get_lr_multiplier(self.current_epoch)
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = lr
+            else:
+                self.base_scheduler.step()
+        
     # Optimizers for each model
-    optimizer_one_hot = AdamW(model_one_hot.parameters(), lr=5e-4)
-    optimizer_soft_label = AdamW(model_soft_label.parameters(), lr=5e-4)
+    optimizer_one_hot = AdamW(model_one_hot.parameters(), lr=target_lr)
+    optimizer_soft_label = AdamW(model_soft_label.parameters(), lr=target_lr)
+
+
+    # optimizer_one_hot = SGD(model_one_hot.parameters(), lr=5e-2, momentum=0.9)
+    # optimizer_soft_label = SGD(model_soft_label.parameters(), lr=5e-2, momentum=0.9)
     
 
     # Setup the scheduler based on selection
@@ -536,9 +581,12 @@ if __name__ == "__main__":
         scheduler_one_hot = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_one_hot, T_max=args.num_epochs)
         scheduler_soft_label = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_soft_label, T_max=args.num_epochs)
     else:
-        scheduler_one_hot = torch.optim.lr_scheduler.StepLR(optimizer_one_hot, step_size=30, gamma=0.1)  # Reduce LR every 10 epochs by a factor of 0.1
-        scheduler_soft_label = torch.optim.lr_scheduler.StepLR(optimizer_soft_label, step_size=30, gamma=0.1)
+        scheduler_one_hot = torch.optim.lr_scheduler.StepLR(optimizer_one_hot, step_size=20, gamma=0.1)  # Reduce LR every 10 epochs by a factor of 0.1
+        scheduler_soft_label = torch.optim.lr_scheduler.StepLR(optimizer_soft_label, step_size=20, gamma=0.1)
  
+
+    scheduler_one_hot = WarmupScheduler(optimizer_one_hot, scheduler_one_hot, warmup_epochs, get_lr_multiplier)
+    scheduler_soft_label = WarmupScheduler(optimizer_soft_label, scheduler_soft_label, warmup_epochs, get_lr_multiplier)
 
     # Loss function
     loss_fn = CrossEntropyLoss(reduction = "sum")
@@ -586,31 +634,33 @@ if __name__ == "__main__":
             
             
             # Forward pass for one hot model
+            optimizer_one_hot.zero_grad()
             outputs_one_hot = model_one_hot(x_batch)
             pred_logits_one_hot = outputs_one_hot.logits
             log_probs_one_hot = F.log_softmax(pred_logits_one_hot, dim=-1)
-            loss = -(y_one_hot * log_probs_one_hot).sum()
-            optimizer_one_hot.zero_grad()
+            loss = -(y_one_hot * log_probs_one_hot).sum() / (x_batch.shape[0] * x_batch.shape[1])
             loss.backward()
             optimizer_one_hot.step()
-            total_loss_one_hot += loss.item() #* ( x_batch.shape[0])
+            total_loss_one_hot += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
             loss = 0
             
 
             # Forward pass for soft label model
+            optimizer_soft_label.zero_grad()
             outputs_soft_label = model_soft_label(x_batch)
             pred_logits_soft_label = outputs_soft_label.logits
             log_probs_soft_label = F.log_softmax(pred_logits_soft_label, dim=-1)
-            loss = -(y_soft_label * log_probs_soft_label).sum()
-            optimizer_soft_label.zero_grad()
+            loss = -(y_soft_label * log_probs_soft_label).sum() / (x_batch.shape[0] * x_batch.shape[1])
             loss.backward()
             optimizer_soft_label.step()
-            total_loss_soft_label += loss.item() #* ( x_batch.shape[0])
+            total_loss_soft_label += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
             loss = 0
 
 
             del pred_logits_soft_label
             del pred_logits_one_hot
+            del log_probs_soft_label
+            del log_probs_one_hot
 
             batch_idx += 1
             num_datapoints += x_batch.shape[0]
