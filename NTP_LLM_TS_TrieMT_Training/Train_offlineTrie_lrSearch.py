@@ -381,6 +381,7 @@ def get_soft_label(context_tree, args, X):
     output = context_tree.retrieve_softlabel(X)
 
     # print(output)
+    print("HERE IN CUSTOMCRITERION")
     y_soft_label = torch.zeros(X.shape[0], args.context_length, args.vocab_size)
     for data_index, soft_label_list in enumerate(output):
         # For each key in the dictionary, set the value in the tensor to 1
@@ -389,6 +390,7 @@ def get_soft_label(context_tree, args, X):
                 y_soft_label[data_index, ctx_index, vocab_index] = vocab_count
     y_soft_label = F.normalize(y_soft_label, p = 1, dim = 2)
 
+    print("HERE IN CUSTOMCRITERION")
     # print(y_soft_label)
     # print(torch.norm(y_soft_label[0,0,:], p = 2))
     # print(y_soft_label.shape)
@@ -412,6 +414,7 @@ class CustomCriterion:
         if self.model_type == 'one_hot':
             y = F.one_hot(batch, num_classes=args.vocab_size).to(logits.device).float()
         else:
+            print("HERE IN CUSTOMCRITERION")
             y = get_soft_label(context_tree, args, batch).float().to(logits.device)
             
         log_probs = F.log_softmax(logits, dim=-1)
@@ -455,6 +458,7 @@ def find_optimal_lrs(model_one_hot, model_soft_label, train_dataloader, device, 
     optimizer_soft_label = AdamW(model_soft_label.parameters(), lr=1e-7)
     criterion_soft_label = CustomCriterion('soft_label')
     
+    print("DUIASHDUI ASKGDAS")
     lr_finder_soft_label = LRFinder(
         model=model_soft_label,
         optimizer=optimizer_soft_label,
@@ -502,7 +506,6 @@ if __name__ == "__main__":
     parser.add_argument("--exp_case", type=int, default=0, help="Used for sockeye purposes")
     parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
     parser.add_argument("--stride", type=int, default=1, help="Window stride size")
-    parser.add_argument("--step_size", type=int, default=16, help="Step size")
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")

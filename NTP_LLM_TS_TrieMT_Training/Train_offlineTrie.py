@@ -415,7 +415,6 @@ if __name__ == "__main__":
     parser.add_argument("--exp_case", type=int, default=0, help="Used for sockeye purposes")
     parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
     parser.add_argument("--stride", type=int, default=1, help="Window stride size")
-    parser.add_argument("--step_size", type=int, default=16, help="Step size")
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")
