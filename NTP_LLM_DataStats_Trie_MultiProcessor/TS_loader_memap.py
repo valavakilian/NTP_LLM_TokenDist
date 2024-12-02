@@ -283,6 +283,7 @@ class TinyStoriesDataset(Dataset):
         return chunk
 
 
+
 def collate_fn(batch: List[np.ndarray]) -> torch.Tensor:
     """Convert list of numpy arrays to a single torch tensor."""
     return torch.from_numpy(np.array(batch)).long()

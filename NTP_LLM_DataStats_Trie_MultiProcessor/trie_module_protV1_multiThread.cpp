@@ -857,7 +857,7 @@ public:
 
     EntropyResult  calculate_and_get_entropy_faster_root() {
         DEBUG_PRINT("________________________________________________________________");
-        DEBUG_PRINT("calculate_and_get_entropy_faster_branch");
+        DEBUG_PRINT("calculate_and_get_entropy_faster_root");
 
         // int64_t total_N = 0;
         double total_entropy = 0;

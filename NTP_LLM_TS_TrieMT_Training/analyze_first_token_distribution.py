@@ -572,6 +572,7 @@ if __name__ == "__main__":
     firstTwo_token_bins = {}
 
 
+    print("Processing to two token distribution")
     # Training loop for the first model on dataset1
     for batch in tqdm(dataloader):  
         
@@ -594,6 +595,7 @@ if __name__ == "__main__":
     plot_tuple_frequency(firstTwo_token_bins, graph_tokenFirstTwoDist_filename)
 
 
+     print("Separating the tokens into bins ... ")
     bins, bin_sums = distribute_tuples(firstTwo_token_bins, 100)
     print("Bin loads:", bin_sums)
     # print("Bin assignments:", bins)

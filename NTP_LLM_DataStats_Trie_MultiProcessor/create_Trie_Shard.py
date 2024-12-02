@@ -91,7 +91,8 @@ def plot_entropy_perCtxLen(data_log, file_path, precDone, ctx_len):
     # Extract the values for each key across document counts (assuming document count is the key)
     doc_counts = sorted(data_log['entropy'].keys())  # Assuming the keys are document counts
     
-    target_ctx_lens = np.linspace(1, ctx_len // 2, 8, dtype=int).tolist()
+    target_ctx_lens = np.linspace(1, len(ctx_len) // 2, 8, dtype=int).tolist()
+    target_ctx_lens = [ctx_len[t] for t in target_ctx_lens]
     
     entropy = [data_log['entropy'][doc] for doc in doc_counts]
     entropy_per_ctxLen = {}
@@ -277,7 +278,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         return context_tree_MT
     else:
         print("File does not exist or forced to Trie recreation requested.")
-        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 50, args.root_ctx_len)
+        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 50, args.context_length)
 
 
 
@@ -369,9 +370,9 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 print("_" * 100)
 
 
-                plot_data_log_subplots(data_log_MT, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%TS.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_calc_times(data_log_MT, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%TS.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_entropy_perCtxLen(data_log_MT, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%TS.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len = args.context_length)
+                plot_data_log_subplots(data_log_MT, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+                plot_calc_times(data_log_MT, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+                plot_entropy_perCtxLen(data_log_MT, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len =  [t for t in range(0, args.context_length - args.root_ctx_len)])
 
                 with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
                     pickle.dump(data_log_MT, pickle_file)

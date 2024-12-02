@@ -500,6 +500,65 @@ def distribute_tuples(tuple_counts, num_bins):
     return bins, bin_sums
 
 
+def get_context_pair_frequencies(dataloader, max_batches=1000):
+    """Fast version that stays on device"""
+    pair_counts = {}
+    
+    for i, batch in enumerate(tqdm(dataloader, total=max_batches)):
+        if i >= max_batches:
+            break
+            
+        # Just index the first two tokens and process them directly
+        pairs = batch[:, :2]  # stays on GPU/CPU depending on your setup
+        
+        # # Process each pair directly without moving data around
+        # for p in pairs:
+        #     pair = (int(p[0]), int(p[1]))  # minimal conversion
+        #     # pair_counts[pair] = pair_counts.get(pair, 0) + 1
+    
+    return pair_counts
+
+
+from concurrent.futures import ThreadPoolExecutor
+from collections import Counter
+import threading
+
+
+def count_pairs_in_batch(batch):
+    """Process a single batch and return its pair counts"""
+    first_pairs = batch[:, :2].cpu().numpy()
+    return Counter(map(tuple, first_pairs))
+
+def get_context_pair_frequencies_threaded(dataloader, max_batches=1000, num_workers=4):
+    """
+    Count frequencies of initial token pairs using multiple threads.
+    """
+    all_counters = []
+    counter_lock = threading.Lock()
+    
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = []
+        
+        for i, batch in enumerate(tqdm(dataloader, total=max_batches, desc="Submitting batches")):
+            if i >= max_batches:
+                break
+            futures.append(executor.submit(count_pairs_in_batch, batch))
+        
+        # Collect results as they complete
+        for future in tqdm(futures, desc="Processing results"):
+            counter = future.result()
+            with counter_lock:
+                all_counters.append(counter)
+    
+    # Combine all counters
+    final_counts = Counter()
+    for counter in tqdm(all_counters, desc="Combining counts"):
+        final_counts.update(counter)
+    
+    return dict(final_counts)
+
+
+
 if __name__ == "__main__":
     """
     These stages are designed to be run in order.
@@ -555,12 +614,21 @@ if __name__ == "__main__":
         percentage=perc_stories
     )
 
-    print("Dataloader created. ")
+    print("Data created. ")
 
     # Print statistics
     print_dataset_stats(dataset, batch_size=args.batch_size)
 
     num_ctx = len(dataset)
+
+    # print("Processing the first token distributions ...")
+    # firstTwo_token_bins = dataset.get_token_pair_frequencies()
+
+    # # Print the most common initial token pairs
+    # for pair, count in sorted(pair_frequencies.items(), key=lambda x: x[1], reverse=True)[:10]:
+    #     print(f"Token pair {pair}: {count} occurrences")
+    #     input()
+
 
     # Create dataloader
     dataloader = get_dataloader(
@@ -570,33 +638,44 @@ if __name__ == "__main__":
         num_workers=4  # Adjust based on your system
     )
 
+    print("Dataloader created. ")
+
+    
     first_token_bins = {token_num:0 for token_num in range(0, args.vocab_size)}
 
-    firstTwo_token_bins = {}
+    # firstTwo_token_bins = get_context_pair_frequencies(dataloader, max_batches=1000)
+
+    firstTwo_token_bins = get_context_pair_frequencies_threaded(dataloader, max_batches=1000)
+    
+
+    # firstTwo_token_bins = {}
 
 
-    # Training loop for the first model on dataset1
-    for batch in tqdm(dataloader):  
+    # print("Processing the first token distributions ...")
+    # # Training loop for the first model on dataset1
+    # for batch in tqdm(dataloader):  
         
-        # Extract `x` (input) and `y` (target) from the full sequence
-        x_batch_firstToken = batch[:, 0]  # Everything except the last token
-        first_token_bins = update_first_count_dict(x_batch_firstToken, first_token_bins)
+    #     # Extract `x` (input) and `y` (target) from the full sequence
+    #     x_batch_firstToken = batch[:, 0]  # Everything except the last token
+    #     first_token_bins = update_first_count_dict(x_batch_firstToken, first_token_bins)
 
 
-        x_batch_firstTwoTokens = batch[:, 0:2] 
-        x_batch_firstTwoTokens = [tuple(row) for row in x_batch_firstTwoTokens.tolist()]
-        firstTwo_token_bins = update_firstTwo_count_dict(x_batch_firstTwoTokens, firstTwo_token_bins)
+    #     x_batch_firstTwoTokens = batch[:, 0:2] 
+    #     x_batch_firstTwoTokens = [tuple(row) for row in x_batch_firstTwoTokens.tolist()]
+    #     firstTwo_token_bins = update_firstTwo_count_dict(x_batch_firstTwoTokens, firstTwo_token_bins)
 
+    
 
     save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Graphs/firstTokenDistributions/"
     filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
-    graph_tokenFirstDist_filename = f"{save_graph_folder}{filename}_firstToken.jpg"
-    plot_frequency_distribution(first_token_bins, graph_tokenFirstDist_filename)
+    # graph_tokenFirstDist_filename = f"{save_graph_folder}{filename}_firstToken.jpg"
+    # plot_frequency_distribution(first_token_bins, graph_tokenFirstDist_filename)
 
     graph_tokenFirstTwoDist_filename = f"{save_graph_folder}{filename}_firstTwoTokens.jpg"
     plot_tuple_frequency(firstTwo_token_bins, graph_tokenFirstTwoDist_filename)
 
 
+    print("Separating data into first two token bins ...")
     bins, bin_sums = distribute_tuples(firstTwo_token_bins, args.num_bins)
     print("Bin loads:", bin_sums)
     # print("Bin assignments:", bins)

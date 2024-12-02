@@ -298,11 +298,12 @@ class TinyStoriesDataset(Dataset):
         
         story_idx, start_idx, end_idx = self.chunk_locations[idx]
         if self.is_root:
-            chunk = self.stories[story_idx, start_idx:end_idx][0:self.root_ctx_len]
+            chunk = self.stories[story_idx, start_idx:end_idx][0:self.root_ctx_len+1]
         else:
-            chunk = self.stories[story_idx, start_idx:end_idx][self.root_ctx_len:]
+            chunk = self.stories[story_idx, start_idx:end_idx]
 
         return chunk
+
 
 def collate_fn(batch: List[np.ndarray]) -> torch.Tensor:
     """Convert list of numpy arrays to a single torch tensor."""

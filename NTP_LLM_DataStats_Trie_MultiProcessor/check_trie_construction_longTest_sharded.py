@@ -208,43 +208,104 @@ def generate_equal_spaced_points(num_examples, num_points):
 
 
 
-class CustomIntegerDataset(Dataset):
-    def __init__(self, data, context_length, step_size):
+class IntegerDataset(Dataset):
+    def __init__(self, data, context_length, stride):
         self.data = data  # Custom list of integers
         self.context_length = context_length
-        self.step_size = step_size
+        self.stride = stride
     
     def __len__(self):
-        return (len(self.data) - self.context_length) // self.step_size
+        return (len(self.data) - self.context_length) // self.stride
     
     def __getitem__(self, idx):
-        start_idx = idx * self.step_size
+        start_idx = idx * self.stride
         x = self.data[start_idx : start_idx + self.context_length + 1]
         return torch.tensor(x, dtype=torch.long)
     
     def calculate_num_datapoints(self):
-        return (len(self.data) - self.context_length) // self.step_size
+        return (len(self.data) - self.context_length) // self.stride
 
 
-def create_custom_dataloader(data, context_length, batch_size, step_size):
-    dataset = CustomIntegerDataset(data, context_length, step_size)
+
+class ShardIntegerDataset(Dataset):
+    def __init__(self, data, context_length, stride, bin_assigned_indices=None, is_root=False, root_ctx_len=2):
+        self.data = data  # Custom list of integers
+        self.context_length = context_length
+        self.stride = stride
+        self.bin_assigned_indices = bin_assigned_indices
+        self.filtered_indices = self._filter_valid_indices()  # Pre-compute valid indices
+        self.is_root = is_root
+        self.root_ctx_len = root_ctx_len
+    
+    def _filter_valid_indices(self):
+        """Filter indices where contexts start with valid tokens."""
+        if self.bin_assigned_indices is None:
+            return range((len(self.data) - self.context_length) // self.stride)
+        
+        valid_indices = []
+        # print(self.bin_assigned_indices)
+        for idx in range((len(self.data) - self.context_length) // self.stride):
+            start_idx = idx * self.stride
+            # print([self.data[start_idx], self.data[start_idx + 1]])
+            # input()
+            if (
+                len(self.data) > start_idx + 1
+                and (self.data[start_idx], self.data[start_idx + 1]) in self.bin_assigned_indices
+            ):
+                # print("I happend")
+                valid_indices.append(idx)
+        return valid_indices
+
+    def __len__(self):
+        return len(self.filtered_indices)
+    
+    def __getitem__(self, idx):
+        actual_idx = self.filtered_indices[idx]  # Map to filtered index
+        start_idx = actual_idx * self.stride
+
+        if self.is_root:
+            x = self.data[start_idx : start_idx + self.root_ctx_len + 1]
+        else:
+            x = self.data[start_idx : start_idx + self.context_length + 1]
+        
+        return torch.tensor(x, dtype=torch.long)
+
+    def calculate_num_datapoints(self):
+        return len(self.filtered_indices)
+
+
+
+def create_integer_dataloader(data, context_length, batch_size, stride):
+    dataset = IntegerDataset(data, context_length, stride)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    num_data_points = dataset.calculate_num_datapoints()
+    return dataloader, num_data_points
+
+
+def create_shard_integer_dataloader(data, context_length, batch_size, stride, bin_assigned_indices, root_ctx_len, is_root):
+    dataset = ShardIntegerDataset(data, context_length, stride, bin_assigned_indices, is_root = is_root, root_ctx_len = root_ctx_len)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     num_data_points = dataset.calculate_num_datapoints()
     return dataloader, num_data_points
 
 
 
-def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_examples):
+
+def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_examples, is_root):
 
     milestones = generate_equal_spaced_points(num_examples, num_milestones)[1:] # exclude zero
     print("milestones are : " + str(milestones))
 
 
-    save_tree_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/context_trees_memap_cpp/"
-    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/graph_trees_cpp/"
-    save_logs_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/logs_trees_cpp/"
-    save_logs_filename = f"voc_{args.vocab_size}_ctxLen_{args.context_length}.pkl"
-    memap_filename = f"{save_tree_folder}{memap_filename}"
+    save_tree_folder =  bin_folder_path + "context_trees_memap_cpp/"
+    save_graph_folder = bin_folder_path + "graph_trees_cpp/"
+    save_logs_folder =  bin_folder_path + "logs_trees_cpp/"
+    if is_root:
+        save_logs_filename_MT = f"TrieRoot.pkl"
+        memap_filename = f"{save_tree_folder}TrieRoot_MT"
+    else:
+        save_logs_filename_MT = f"Trie{args.group}.pkl"
+        memap_filename = f"{save_tree_folder}Trie{args.group}_MT"
 
        
     exp_was_initiated = False
@@ -273,7 +334,11 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
     print("Tree is new. Constructing ...")
     up_to_ctx_count_processed = 0
     # input(memap_filename)
-    context_tree = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename, 50, args.context_length)
+    if is_root:
+        context_tree = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename, 50, args.root_ctx_len)
+    else:
+        context_tree = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename, 50, args.context_length)
+
 
     data_log = {
         "entropy": {},
@@ -292,7 +357,8 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
 
     insert_runtime = 0
     
-    
+    # print("HERERERER")
+    # input()
     contexts_count = 0
     milestone_index = 0
     # Step 6: Iterate through the DataLoader and print samples
@@ -302,6 +368,9 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
         # print(X)
         contexts_count += X.shape[0]
 
+        # print(X.shape)
+        # input()
+
         # print("Inserting X: " + str(X))
 
         batches_seen += 1
@@ -310,14 +379,17 @@ def load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ex
             del X
             print("Context count " + str(contexts_count) + " is already processed.")
         else:
-            start_time_insert = time.time()
-            _ = context_tree.insert(X, False)
-            insert_runtime += time.time() - start_time_insert
+            result = context_tree.insert(X, False)
+            # Get the results and timing
+            # soft_labels = result.result  # This is your original return value
+            execution_time_seconds = result.execution_time_ms / 1000.0
+            # insert_runtime += time.time() - start_time_insert
+            insert_runtime += execution_time_seconds
             del X
             # print("Inserted a batch")
         
 
-        # print("Entropy: " + str(context_tree.calculate_and_get_entropy_faster()))
+        # print("Entropy: " + str(context_tree.calculate_and_get_entropy_faster_branch()))
         # print("______________________________________________________")
         # input()
                 
@@ -366,6 +438,112 @@ def heavy_tail_prob_dist(n, alpha=0.5):
     prob_dist = weights / np.sum(weights)
     return prob_dist
 
+
+
+def update_firstTwo_count_dict(tensor, count_dict):
+    
+    # Update counts
+    for value in tensor:
+        if value in count_dict.keys():
+            count_dict[value] = count_dict[value] + 1
+        else:
+            count_dict[value] = 1
+        
+    return count_dict
+
+
+def distribute_tuples(tuple_counts, num_bins):
+    # Sort tuples by count in descending order
+    sorted_tuples = sorted(tuple_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # Initialize bins
+    bins = [[] for _ in range(num_bins)]
+    bin_sums = [0] * num_bins
+    
+    # Assign each tuple to the bin with smallest current sum
+    for tuple_val, count in sorted_tuples:
+        min_bin = min(range(num_bins), key=lambda i: bin_sums[i])
+        bins[min_bin].append(tuple_val)
+        bin_sums[min_bin] += count
+    
+    return bins, bin_sums
+
+def plot_tuple_frequency(count_dict, filename):
+    
+    # Sort the dictionary by the tuple values
+    sorted_items = sorted(count_dict.items(), key=lambda x: x[1], reverse=True)
+
+    
+    # Separate tuples and counts
+    tuples_str = [str(t[0]) for t in sorted_items]  # Convert tuples to strings for x-axis
+    counts = [t[1] for t in sorted_items]
+
+
+    tuples_str = tuples_str[0:1000]
+    counts = counts[0:1000]
+    
+    # Create bar plot
+    plt.figure(figsize=(15, 6))
+    plt.bar(tuples_str, counts)
+    
+    # Customize the plot
+    plt.title('Token Pair Frequency Distribution')
+    plt.xlabel('Token Pairs')
+    plt.ylabel('Frequency')
+    plt.grid(True, alpha=0.3)
+    
+    # Rotate x-axis labels if there are many pairs
+    plt.xticks(rotation=45, ha='right')
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    
+    plt.savefig(filename)
+
+    # Show the plot
+    # plt.show()
+
+
+
+
+def cal_entropy_on_python_dict(dataloader, ctx_len, is_root):
+
+    dict_counts = {}
+    for X in tqdm(dataloader):
+        for ctx_index in range(0, X.shape[0]):
+            ctx = X[ctx_index,:]
+            for i in range(1,ctx_len+1):
+                string = '-'.join(ctx[0:i].numpy().astype(str).tolist())
+                if string in dict_counts.keys():
+                    dict_counts[string][str(int(ctx[i].item()))] += 1
+                else:
+                    dict_counts[string] = {str(i):0 for i in range(0,vocab_size)}
+                    dict_counts[string][str(int(ctx[i].item()))] += 1
+    
+    entropy = 0
+    total_num = 0
+    entropy_dict = {}
+    for index, (ctx, ctx_ctp) in enumerate(dict_counts.items()):
+        entropy_ctx = 0
+        count_ctx = sum(list(ctx_ctp.values()))
+        for _, (ntp, count) in enumerate(ctx_ctp.items()):
+            if count != 0:
+                entropy_ctx -= count / count_ctx * np.log(count / count_ctx)
+        entropy += count_ctx * entropy_ctx
+        total_num += count_ctx
+        
+        entropy_dict[ctx] = entropy_ctx
+
+    entropy /= total_num
+    entropy_dict = {key:value / total_num for key,value in entropy_dict.items()}
+
+    return entropy, total_num
+    
+
+
+
+
+
 if __name__ == "__main__":
     """
     These stages are designed to be run in order.
@@ -377,21 +555,15 @@ if __name__ == "__main__":
     parser.add_argument("--context_length", type=int, default=16, help="Context Length")
     parser.add_argument("--exp_case", type=int, default=0, help="Used for sockeye purposes")
     parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
-    parser.add_argument("--step_size", type=int, default=16, help="Step size")
+    parser.add_argument("--stride", type=int, default=16, help="Step size")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     args = parser.parse_args()
 
     # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
     #     file.write("Got in ? \n")
-
-    vocab_sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8196, 16392]
-    context_lenghts = [32, 64, 128, 256, 512, 1024]
-
-    total_num_cases = len(vocab_sizes) * len(context_lenghts)
-    args.vocab_size = vocab_sizes[args.exp_case % len(vocab_sizes)]
-    args.context_length = context_lenghts[args.exp_case // len(vocab_sizes)]
-    args.step_size = args.context_length // 2
-    num_epochs = 90
+    args.perc_stories = 100
+    args.num_bins = 4
+    args.root_ctx_len = 2
     
 
     
@@ -418,15 +590,140 @@ if __name__ == "__main__":
     sequence_range = 10000
     
     custom_data = [np.random.choice(vocabs, p=prob_dist) for _ in range(sequence_range)]  # Replace 10 with your desired length
-    step_size = 1
+    stride = 1
+    dataloader, num_ctx = create_integer_dataloader(custom_data, context_length, batch_size, stride)
+    
+    # Create a bin of size 4
+    firstTwo_token_bins = {}
+    # Training loop for the first model on dataset1
+    for batch in tqdm(dataloader):  
+        x_batch_firstTwoTokens = batch[:, 0:2] 
+        x_batch_firstTwoTokens = [tuple(row) for row in x_batch_firstTwoTokens.tolist()]
+        firstTwo_token_bins = update_firstTwo_count_dict(x_batch_firstTwoTokens, firstTwo_token_bins)
+
+    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Graphs/firstTokenDistributions/"
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+    graph_tokenFirstTwoDist_filename = f"{save_graph_folder}{filename}_firstTwoTokens.jpg"
+    plot_tuple_frequency(firstTwo_token_bins, graph_tokenFirstTwoDist_filename)
+
+    bins, bin_sums = distribute_tuples(firstTwo_token_bins, args.num_bins)
+    print("Bin loads:", bin_sums)
+    # print("Bin assignments:", bins)
+
+
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Tries/"
+    folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
+    folder_Tries_path = save_Trie_folder + folder_name_Tries
+    if not os.path.exists(folder_Tries_path):
+        os.mkdir(folder_Tries_path)
+    
+    for b in range(0, args.num_bins):
+        bin_folder_path = folder_Tries_path + f"group{b}/"
+        if not os.path.exists(bin_folder_path):
+            os.mkdir(bin_folder_path)
+        if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
+            os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
+        if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
+            os.mkdir(bin_folder_path + "graph_trees_cpp/")
+        if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
+            os.mkdir(bin_folder_path + "logs_trees_cpp/")
+
+        bin_assigned_indices = bins[b]
+        np.save(bin_folder_path + 'indices.npy', bin_assigned_indices)
     
 
+    bin_folder_path = folder_Tries_path + f"group_root/"
+    if not os.path.exists(bin_folder_path):
+        os.mkdir(bin_folder_path)
+    if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
+        os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
+    if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
+        os.mkdir(bin_folder_path + "graph_trees_cpp/")
+    if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
+        os.mkdir(bin_folder_path + "logs_trees_cpp/")
+
+
+
+    entropy_branches_Trie = {}
+    entropy_branches_Dict = {}
+    for group in range(0, args.num_bins):
+        print("_" * 100)
+        bin_assigned_indices =  bins[group]
+        # print("bins[group]: " + str(bins[group]))
+        dataloader, num_ctx = create_shard_integer_dataloader(custom_data, context_length, batch_size, stride, bin_assigned_indices, args.root_ctx_len, is_root = False)
+        filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+        save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Tries/"
+        folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
+        folder_Tries_path = save_Trie_folder + folder_name_Tries
+        bin_folder_path = folder_Tries_path + f"group{group}/"
+        args.group = group
+        num_milestones = 2
+        print("num_ctx: " + str(num_ctx))
+        context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = False)
+
+        print("Tree loading/contruction complete")
+        result = context_tree.calculate_and_get_entropy_faster_branch()
+        dataset_entropy = result.entropy
+        total_count = result.total_count
+        print("Entropy Calculated Trie: " + str(dataset_entropy))
+        print("Count Calculated Trie: " + str(total_count))
+        print("_" * 100)
+
+        entropy_branches_Trie[f"Group_{group}"]={"entropy": dataset_entropy, "count": total_count}
+        
+
+        entropy, total_num = cal_entropy_on_python_dict(dataloader, args.context_length - args.root_ctx_len, is_root = False)
+        print("Entropy Calculated Dict: " + str(entropy))
+        print("Count Calculated Dict: " + str(total_num))
+        entropy_branches_Dict[f"Group_{group}"]={"entropy": entropy, "count": total_num}
+        print("_" * 100)
+
     
+    print("_" * 100)
+    print("Root")
+    dataloader, num_ctx = create_shard_integer_dataloader(custom_data, context_length, batch_size, stride, None, args.root_ctx_len, is_root = True)
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Tries/"
+    folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
+    folder_Tries_path = save_Trie_folder + folder_name_Tries
+    bin_folder_path = folder_Tries_path + f"group_root/"
+    # args.group = group
+    num_milestones = 2
+    print("num_ctx: " + str(num_ctx))
+    context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = True)
 
-    dataloader, num_ctx = create_custom_dataloader(custom_data, context_length, batch_size, step_size)
+    print("Tree loading/contruction complete")
+    result = context_tree.calculate_and_get_entropy_faster_root()
+    dataset_entropy = result.entropy
+    total_count = result.total_count
+    print("Entropy Calculated Trie: " + str(dataset_entropy))
+    print("Count Calculated Trie: " + str(total_count))
+    print("_" * 100)
+
+    entropy_branches_Trie[f"Root"]={"entropy": dataset_entropy, "count": total_count}
     
+    
+    entropy, total_num = cal_entropy_on_python_dict(dataloader, args.root_ctx_len, is_root = True)
+    print("Entropy Calculated Dict: " + str(entropy))
+    print("Count Calculated Dict: " + str(total_num))
+    entropy_branches_Dict[f"Group_{group}"]={"entropy": entropy, "count": total_num}
+    print("_" * 100)
+    # input()
 
 
+    full_entropy = 0
+    full_count = 0
+    for group, info in entropy_branches_Trie.items():
+        full_entropy += info["entropy"] * info["count"]
+        full_count += info["count"]
+    full_entropy = full_entropy / full_count
+
+    print("Full Entropy from multiProcessed Trie:" + str(full_entropy))
+    print("Full Count from multiProcessed Trie:" + str(full_count))
+
+
+
+    dataloader, num_ctx = create_integer_dataloader(custom_data, context_length, batch_size, stride)
     dict_counts = {}
     for batch in dataloader:
         for x in batch:
@@ -452,137 +749,128 @@ if __name__ == "__main__":
         
         entropy_dict[ctx] = entropy_ctx
     
-    # print("entropy_dict_list: " + str(entropy_dict.values()))
-
     entropy /= total_num
     entropy_dict = {key:value / total_num for key,value in entropy_dict.items()}
     
     # print("dict_counts:")
     # print(dict_counts)
-    print("num of contexts: " + str(len(list(dict_counts.keys()))))
-    print("entropy: " + str(entropy))
+    print("num of contexts String dataset: " + str(len(list(dict_counts.keys()))))
+    print("entropy String dataset: " + str(entropy))
     # print("entropy_dict: " + str(entropy_dict))
     # print("num unique contexts: " + str(len(dict_counts.keys())))
     
     # input()
 
-    num_milestones = 10
-    memap_filename = f"debug_trie"
-    context_tree = load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ctx)
-    print("Tree loading/contruction complete")
-    print("+++++++++++++++++++++++++++++++++++++++++++++++++++++")
-    dataset_entropy = context_tree.calculate_and_get_entropy_faster()
-    print("Entropy Calculated: " + str(dataset_entropy))
-    print("+++++++++++++++++++++++++++++++++++++++++++++++++++++")
-    # input()
 
-    print("Analyzing Data ... ")
-    # Manual training loop
-    num_datapoints = 0
 
     
-    count_num_one_hots = 0
+    # print("Analyzing Data ... ")
+    # # Manual training loop
+    # num_datapoints = 0
+
     
-    norm_soft_vs_hard_diff = 0
-    num_total_samples = 0
+    # count_num_one_hots = 0
+    
+    # norm_soft_vs_hard_diff = 0
+    # num_total_samples = 0
 
-    print("_" * 100)
-    print("Checking that the Trie is correct")
-    is_correct = True
-    # Training loop for the first model on dataset1
-    for batch in tqdm(dataloader):
+    # print("_" * 100)
+    # print("Checking that the Trie is correct")
+    # is_correct = True
+    # # Training loop for the first model on dataset1
+    # for batch in tqdm(dataloader):
 
-        y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
-        y_soft_label = get_soft_label(context_tree, args, batch).float()
+    #     y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
+    #     y_soft_label = get_soft_label(context_tree, args, batch).float()
 
-        x_batch = batch[:, :-1]  # Everything except the last token
-        norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
-        norm_soft_vs_hard_diff += norms.sum()
-        num_total_samples += batch.shape[0] * batch.shape[1]
+    #     x_batch = batch[:, :-1]  # Everything except the last token
+    #     norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
+    #     norm_soft_vs_hard_diff += norms.sum()
+    #     num_total_samples += batch.shape[0] * batch.shape[1]
 
-        for i in range(0, batch.shape[0]):
-            for context_index in range(1,batch.shape[1]):
-                string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
+    #     for i in range(0, batch.shape[0]):
+    #         for context_index in range(1,batch.shape[1]):
+    #             string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
                 
-                prob_vector_trie = y_soft_label[i,context_index-1]
-                # Step 1: Extract values as a tensor
-                counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
-                # Step 2: Normalize to create a probability vector
-                prob_vector = counts / counts.sum()
+    #             prob_vector_trie = y_soft_label[i,context_index-1]
+    #             # Step 1: Extract values as a tensor
+    #             counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
+    #             # Step 2: Normalize to create a probability vector
+    #             prob_vector = counts / counts.sum()
 
-                # print(y_soft_label[i,context_index-1])
-                # print(prob_vector)
-                if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
-                    print("Following context are incorrrectly calculated with the Trie.")
-                    print("Context: " + str(string))
-                    print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
-                    print("soft_label python: " + str(prob_vector))
-                    print("_______________________________________________________________________")
-                    is_correct = False
+    #             # print(y_soft_label[i,context_index-1])
+    #             # print(prob_vector)
+    #             if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
+    #                 print("Following context are incorrrectly calculated with the Trie.")
+    #                 print("Context: " + str(string))
+    #                 print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
+    #                 print("soft_label python: " + str(prob_vector))
+    #                 print("_______________________________________________________________________")
+    #                 is_correct = False
     
-    if not is_correct:
-        print("_" * 100)
-        print("Trie is contructed incorrectly")
-        print("_" * 100)
+    # if not is_correct:
+    #     print("_" * 100)
+    #     print("Trie is contructed incorrectly")
+    #     print("_" * 100)
 
-    print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
-
-
-    print("_" * 100)
-    print("Deleting tree and reloading it ...")
-    del context_tree
-    print("Deleted")
-    print("_" * 100)
-
-    memap_filename = f"debug_trie"
-    save_tree_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/context_trees_memap_cpp/"
-    memap_filename = f"{save_tree_folder}{memap_filename}"
-    # input(memap_filename)
-    context_tree = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename)
-    print("Reloaded")
-    print("_" * 100)
+    # print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
 
 
-    is_correct = True
-    print("_" * 100)
-    print("Checking that the loaded Trie is correct")
-    # Training loop for the first model on dataset1
-    for batch in tqdm(dataloader):
+    # print("_" * 100)
+    # print("Deleting tree and reloading it ...")
+    # del context_tree
+    # print("Deleted")
+    # print("_" * 100)
 
-        y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
-        y_soft_label = get_soft_label(context_tree, args, batch).float()
+    # memap_filename = f"debug_trie"
+    # save_tree_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/context_trees_memap_cpp/"
+    # memap_filename = f"{save_tree_folder}{memap_filename}"
+    # # input(memap_filename)
+    # context_tree = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename)
+    # print("Reloaded")
+    # print("_" * 100)
 
-        x_batch = batch[:, :-1]  # Everything except the last token
-        norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
-        norm_soft_vs_hard_diff += norms.sum()
-        num_total_samples += batch.shape[0] * batch.shape[1]
 
-        for i in range(0, batch.shape[0]):
-            for context_index in range(1,batch.shape[1]):
-                string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
+    # is_correct = True
+    # print("_" * 100)
+    # print("Checking that the loaded Trie is correct")
+    # # Training loop for the first model on dataset1
+    # for batch in tqdm(dataloader):
+
+    #     y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
+    #     y_soft_label = get_soft_label(context_tree, args, batch).float()
+
+    #     x_batch = batch[:, :-1]  # Everything except the last token
+    #     norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
+    #     norm_soft_vs_hard_diff += norms.sum()
+    #     num_total_samples += batch.shape[0] * batch.shape[1]
+
+    #     for i in range(0, batch.shape[0]):
+    #         for context_index in range(1,batch.shape[1]):
+    #             string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
                 
-                prob_vector_trie = y_soft_label[i,context_index-1]
-                # Step 1: Extract values as a tensor
-                counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
-                # Step 2: Normalize to create a probability vector
-                prob_vector = counts / counts.sum()
+    #             prob_vector_trie = y_soft_label[i,context_index-1]
+    #             # Step 1: Extract values as a tensor
+    #             counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
+    #             # Step 2: Normalize to create a probability vector
+    #             prob_vector = counts / counts.sum()
 
-                # print(y_soft_label[i,context_index-1])
-                # print(prob_vector)
-                if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
-                    print("Following context are incorrrectly calculated with the Trie.")
-                    print("Context: " + str(string))
-                    print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
-                    print("soft_label python: " + str(prob_vector))
-                    print("_______________________________________________________________________")
-                    input()
+    #             # print(y_soft_label[i,context_index-1])
+    #             # print(prob_vector)
+    #             if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
+    #                 print("Following context are incorrrectly calculated with the Trie.")
+    #                 print("Context: " + str(string))
+    #                 print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
+    #                 print("soft_label python: " + str(prob_vector))
+    #                 print("_______________________________________________________________________")
+    #                 input()
 
-    if not is_correct:
-        print("_" * 100)
-        print("Trie is reloaded incorrectly")
-        print("_" * 100)
+    # if not is_correct:
+    #     print("_" * 100)
+    #     print("Trie is reloaded incorrectly")
+    #     print("_" * 100)
 
-    print("Experiment complete!")
+    # print("Experiment complete!")
 
 
 

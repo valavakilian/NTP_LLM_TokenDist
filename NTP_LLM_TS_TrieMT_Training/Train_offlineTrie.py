@@ -593,6 +593,11 @@ if __name__ == "__main__":
 
     loss_one_hot_list = []
     loss_soft_label_list = []
+
+    loss_one_hot_list_iter = []
+    loss_soft_label_list_iter = []
+    iter_count = 0
+    iter_examples_count = []
     
     print("Initiating training ... ")
     # Manual training loop
@@ -641,6 +646,7 @@ if __name__ == "__main__":
             loss.backward()
             optimizer_one_hot.step()
             total_loss_one_hot += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
+            loss_one_hot_list_iter.append(loss.item())
             loss = 0
             
 
@@ -653,6 +659,7 @@ if __name__ == "__main__":
             loss.backward()
             optimizer_soft_label.step()
             total_loss_soft_label += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
+            loss_soft_label_list_iter.append(loss.item())
             loss = 0
 
 
@@ -668,6 +675,9 @@ if __name__ == "__main__":
             del x_batch
             del y_one_hot
             del y_soft_label
+
+            iter_count += 1
+            iter_examples_count.append(num_datapoints)
         
 
         # print("_" * 100)
@@ -696,6 +706,18 @@ if __name__ == "__main__":
         plt.title("Training Loss Over Epochs")
         plt.legend()
         plt.savefig(f"/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TS_TrieMT_Training/training_graphs/Loss_one_hot_vs_soft_label_{memap_filename}.jpg")
+        plt.clf()
+
+
+        # Plot the loss curve
+        plt.plot(range(0, iter_count), loss_one_hot_list_iter, marker='o', linestyle='-', label=f'Loss one-hot: {loss_one_hot_list_iter[-1]:.4f}', color='blue')
+        plt.plot(range(0, iter_count), loss_soft_label_list_iter, marker='v', linestyle='-', label=f'Loss soft-label: {loss_soft_label_list_iter[-1]:.4f}', color='green')
+        plt.axhline(y=dataset_entropy, color='black', linestyle='-', label=f'Entropy: {dataset_entropy:.4f}')
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training Loss Over Epochs")
+        plt.legend()
+        plt.savefig(f"/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TS_TrieMT_Training/training_graphs/Loss_one_hot_vs_soft_label_{memap_filename}_iterations.jpg")
         plt.clf()
 
     print("Training complete!")
