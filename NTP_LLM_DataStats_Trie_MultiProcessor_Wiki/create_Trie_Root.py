@@ -328,7 +328,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
             # print("Inserted a batch")
             
 
-            if milestone_index < len(milestones) and contexts_count >= milestones[milestone_index]:
+            if milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]:
                 
                 num_ctx_seen = milestones[milestone_index]
 
@@ -444,18 +444,6 @@ if __name__ == "__main__":
     save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
-    if not os.path.exists(folder_Tries_path):
-        os.mkdir(folder_Tries_path)
-    
-    bin_folder_path = folder_Tries_path + f"group_root/"
-    if not os.path.exists(bin_folder_path):
-        os.mkdir(bin_folder_path)
-    if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
-        os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
-    if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
-        os.mkdir(bin_folder_path + "graph_trees_cpp/")
-    if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
-        os.mkdir(bin_folder_path + "logs_trees_cpp/")
     
 
     # Example usage
@@ -502,7 +490,7 @@ if __name__ == "__main__":
     print("_" * 100)
     print("Dataloader Created")
 
-    num_milestones = 10    
+    num_milestones = 100    
     context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx)
     print("Tree loading/contruction complete")
     result = context_tree.calculate_and_get_entropy_faster_root()

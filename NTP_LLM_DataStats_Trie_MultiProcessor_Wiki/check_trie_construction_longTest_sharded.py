@@ -601,7 +601,7 @@ if __name__ == "__main__":
         x_batch_firstTwoTokens = [tuple(row) for row in x_batch_firstTwoTokens.tolist()]
         firstTwo_token_bins = update_firstTwo_count_dict(x_batch_firstTwoTokens, firstTwo_token_bins)
 
-    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Graphs/firstTokenDistributions/"
+    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Graphs/firstTokenDistributions/"
     filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
     graph_tokenFirstTwoDist_filename = f"{save_graph_folder}{filename}_firstTwoTokens.jpg"
     plot_tuple_frequency(firstTwo_token_bins, graph_tokenFirstTwoDist_filename)
@@ -611,7 +611,7 @@ if __name__ == "__main__":
     # print("Bin assignments:", bins)
 
 
-    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Tries/"
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
     if not os.path.exists(folder_Tries_path):
@@ -652,7 +652,7 @@ if __name__ == "__main__":
         # print("bins[group]: " + str(bins[group]))
         dataloader, num_ctx = create_shard_integer_dataloader(custom_data, context_length, batch_size, stride, bin_assigned_indices, args.root_ctx_len, is_root = False)
         filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
-        save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Tries/"
+        save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Tries/"
         folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
         folder_Tries_path = save_Trie_folder + folder_name_Tries
         bin_folder_path = folder_Tries_path + f"group{group}/"
@@ -683,7 +683,7 @@ if __name__ == "__main__":
     print("Root")
     dataloader, num_ctx = create_shard_integer_dataloader(custom_data, context_length, batch_size, stride, None, args.root_ctx_len, is_root = True)
     filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
-    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Debug_Files/Tries/"
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
     bin_folder_path = folder_Tries_path + f"group_root/"

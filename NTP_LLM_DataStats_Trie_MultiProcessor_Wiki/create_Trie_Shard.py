@@ -68,9 +68,9 @@ from torch.optim import SGD
 
 
 
-# from TS_loader import *
+# from Wiki_loader import *
 
-from TS_loader_memap_sharded import *
+from Wiki_loader_memap_sharded import *
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
 
@@ -329,7 +329,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
             # print("Inserted a batch")
             
 
-            if milestone_index < len(milestones) and contexts_count >= milestones[milestone_index]:
+            if milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]:
                 
                 num_ctx_seen = milestones[milestone_index]
 
@@ -370,9 +370,9 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 print("_" * 100)
 
 
-                plot_data_log_subplots(data_log_MT, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%TS.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_calc_times(data_log_MT, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%TS.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_entropy_perCtxLen(data_log_MT, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%TS.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len =  [t for t in range(0, args.context_length - args.root_ctx_len)])
+                plot_data_log_subplots(data_log_MT, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+                plot_calc_times(data_log_MT, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+                plot_entropy_perCtxLen(data_log_MT, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len =  [t for t in range(0, args.context_length - args.root_ctx_len)])
 
                 with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
                     pickle.dump(data_log_MT, pickle_file)
@@ -440,63 +440,54 @@ if __name__ == "__main__":
     
 
     # Example usage
-    dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiText'  # Your saved dataset folder
+    dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiTextBig'  # Your saved dataset folder
     vocab_size = args.vocab_size
     context_length = args.context_length
     batch_size = args.batch_size
     perc_stories = args.perc_stories
 
-    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
-    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor/Tries/"
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%Wiki_Stride{args.stride}"
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
     bin_folder_path = folder_Tries_path + f"group{args.group}/"
     bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
 
 
-    processor = TinyStoriesProcessor(
-        data_dir="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/TinyStories/TinyStories_all_data",
+    # Step 4: Load and Tokenize the Wikitext-2 Dataset
+    # Example usage with stride
+    print("_" * 100)
+    print("Training tokenizer and tokenizing data ... ")
+    tokenized_data, tokenizer = load_and_tokenize_wikitext(
+        dataset_dir=dataset_dir,
         vocab_size=args.vocab_size,
-        percentage=perc_stories,  # Use 10% of the data
-        seed=42  # For reproducibility
+        context_length=args.context_length,
+        tokenizer_path="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Data/Wiki_tokenizer/",
+        tokenized_data_path="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Data/Wiki_tokenized_dataset/"
     )
 
-    processor.process(
-        tokenizer_dir="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TS_TrieMT_Training/data_saves/tokenizers/tokenizer_output_dir",
-        output_dir=f"/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TS_TrieMT_Training/data_saves/tokenized_data_multithreaded_Debug"
-    )
+    # total_num_tokens = len(tokenized_data) * (args.stride / args.context_length)
+    # print("Total number of tokens: " + str(total_num_tokens))
+    print("Complete!")
+    print("_" * 100)
 
-    print("Data processed. ")
-
-    dataset = TinyStoriesDataset(
-        data_dir=f"/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TS_TrieMT_Training/data_saves/tokenized_data_multithreaded_Debug",
-        context_size=context_length,
+    print("_" * 100)
+    print("Creating dataloader ... ")
+    dataloader = create_dataloader(
+        tokenized_data=tokenized_data,
+        context_length=args.context_length,
+        batch_size=args.batch_size,
         stride=args.stride,
-        vocab_size=args.vocab_size,
-        token_pairs = bin_assigned_indices,
-        is_root = False,
-        root_ctx_len = args.root_ctx_len,
-        shuffle_chunks=False,
-        percentage=perc_stories
+        token_pairs=bin_assigned_indices,
+        is_root = False, 
+        root_ctx_len = 2
     )
-
-    print("Dataloader created. ")
-
-    # Print statistics
-    print_token_pair_stats(dataset)
-
-    num_ctx = len(dataset)
-
-    # Create dataloader
-    dataloader = get_dataloader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,  # This will shuffle batches of chunks
-        num_workers=4  # Adjust based on your system
-    )
+    num_ctx = len(dataloader)
+    print("Complete!")
+    print("_" * 100)
     print("Dataloader Created")
 
-    num_milestones = 10    
+    num_milestones = 100    
     context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx)
     print("Tree loading/contruction complete")
     result = context_tree.calculate_and_get_entropy_faster_branch()

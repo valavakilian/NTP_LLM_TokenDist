@@ -191,7 +191,7 @@ private:
     std::map<int64_t, double> entropy_per_level;
     std::map<int64_t, double> count_per_level;
                                
-    const size_t array_size = 200000000; // Size of the array
+    const size_t array_size = 1000000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -199,7 +199,7 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
                                        
-    const size_t size_logcalc_memory = 200000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 500000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
     std::vector<double> logcalc_memory_entropy;
 
@@ -910,7 +910,7 @@ public:
         DEBUG_PRINT("total_counter: " << total_counter);
 
         total_entropy = -total_entropy / total_counter;
-        for(int t = 0; t < context_length; t++){
+        for(int t = 0; t <= context_length ; t++){
             entropy_per_level[t] /= -count_per_level[t];
         }
 
@@ -985,7 +985,7 @@ public:
         DEBUG_PRINT("total_counter: " << total_counter);
 
         total_entropy = -total_entropy / total_counter;
-        for(int t = 0; t < context_length; t++){
+        for(int t = 0; t <= context_length ; t++){
             entropy_per_level[t] /= -count_per_level[t];
         }
 

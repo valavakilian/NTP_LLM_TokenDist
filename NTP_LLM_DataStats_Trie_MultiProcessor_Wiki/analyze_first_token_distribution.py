@@ -65,7 +65,6 @@ import json
 import math
 
 
-# from TS_loader import *
 
 from Wiki_loader_memap_sharded import *
 # -----------------------------------------------------------------------------
@@ -502,7 +501,7 @@ if __name__ == "__main__":
     
 
     save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Graphs/firstTokenDistributions/"
-    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%Wiki_Stride{args.stride}"
     # graph_tokenFirstDist_filename = f"{save_graph_folder}{filename}_firstToken.jpg"
     # plot_frequency_distribution(first_token_bins, graph_tokenFirstDist_filename)
 

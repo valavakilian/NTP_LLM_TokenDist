@@ -110,7 +110,10 @@ class WikitextShiftedDataset(Dataset):
         self.data = tokenized_data
         self.context_length = context_length
         self.stride = stride if stride is not None else context_length
-        self.token_pairs = set(token_pairs) if token_pairs else None
+        if token_pairs is None:
+            self.token_pairs = False
+        else:
+            self.token_pairs = set(tuple(pair) for pair in token_pairs)
         self.is_root = is_root
         self.root_ctx_len = root_ctx_len
         
