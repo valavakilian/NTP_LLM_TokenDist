@@ -290,6 +290,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         "num_total_ctx_len_list": {},
         "insert_calc_time": {},
         "entropy_calc_time": {},
+        "num_oneHots_len_list": {},
+        "num_oneHots_list": {}
     }
 
 
@@ -360,6 +362,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 data_log_MT["num_unique_ctx"][contexts_count] = context_tree_MT.get_num_unique_contexts()
                 data_log_MT["num_unique_ctx_len_list"][contexts_count] = context_tree_MT.get_num_unique_contexts_per_level()
                 data_log_MT["num_total_ctx_len_list"][contexts_count] = context_tree_MT.get_num_total_contexts_per_level()
+                data_log_MT["num_oneHots_list"][contexts_count] = context_tree_MT.get_oneHots_per_level()
+                
 
                 process = psutil.Process(os.getpid())
                 # print("Entropy value is: " + str(entropy_tree))

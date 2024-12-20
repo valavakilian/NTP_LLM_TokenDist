@@ -8,6 +8,7 @@ import json
 from collections import defaultdict
 from tqdm import tqdm
 
+from datasets import load_dataset, load_from_disk
 
 def load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length, tokenizer_path=None, 
                               tokenized_data_path=None, data_percentage=100, force_retokenize=False):
@@ -23,79 +24,95 @@ def load_and_tokenize_wikitext(dataset_dir, vocab_size, context_length, tokenize
         data_percentage: Percentage of data to use (1-100)
         force_retokenize: Force recreation of tokenized data
     """
-    dataset = load_from_disk(dataset_dir)
+    try:
+        # First try loading from disk
+        try:
+            dataset = load_from_disk(dataset_dir)
+        except Exception as e:
+            print(f"Could not load from disk, downloading from HuggingFace: {e}")
+            # If loading from disk fails, download from HuggingFace
+            dataset = load_dataset("wikitext", "wikitext-103-raw-v1", cache_dir=dataset_dir)
 
-    file_name = f"_V{vocab_size}_{data_percentage}%WikiText/"
+        file_name = f"_V{vocab_size}_{data_percentage}%WikiText/"
 
-    tokenizer_path = tokenizer_path + file_name
-    tokenized_data_path = tokenized_data_path + file_name
-    
-    # Load or create tokenizer
-    if tokenizer_path and os.path.exists(tokenizer_path + "tokenizer.json") and not force_retokenize:
-        print(f"Loading existing tokenizer from {tokenizer_path}")
-        tokenizer = Tokenizer.from_file(tokenizer_path + "tokenizer.json")
-    else:
-        print("Creating and training new tokenizer...")
-        tokenizer = Tokenizer(models.BPE())
-        tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
-        trainer = trainers.BpeTrainer(
-            vocab_size=vocab_size, 
-            special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
-        )
-        
-        # Merge text data and apply percentage
-        merged_text = dataset['train']['text'] + dataset['validation']['text'] + dataset['test']['text']
-        total_length = len(merged_text)
-        use_length = int(total_length * (data_percentage / 100))
-        merged_text = merged_text[:use_length]
-        
-        # Train tokenizer with batches
-        def batch_iterator(dataset, batch_size=300000):
-            for i in range(0, len(dataset), batch_size):
-                yield dataset[i:i + batch_size]
-        
-        for batch in batch_iterator(merged_text):
-            tokenizer.train_from_iterator(batch, trainer)
-        
-
-        os.makedirs(tokenizer_path, exist_ok=True)
-        # Save tokenizer if path provided
         if tokenizer_path:
-            print(f"Saving tokenizer to {tokenizer_path}")
-            tokenizer.save(tokenizer_path + "tokenizer.json")
-    
-    # Load or create tokenized data
-    if tokenized_data_path and os.path.exists(tokenized_data_path + "data.pkl") and not force_retokenize:
-        print(f"Loading existing tokenized data from {tokenized_data_path}")
-        with open(tokenized_data_path + "data.pkl", 'rb') as f:
-            tokenized_data = pickle.load(f)
-    else:
-        print("Tokenizing data...")
-        # Apply percentage to dataset before tokenizing
-        merged_text = dataset['train']['text'] + dataset['validation']['text'] + dataset['test']['text']
-        total_length = len(merged_text)
-        use_length = int(total_length * (data_percentage / 100))
-        merged_text = merged_text[:use_length]
-        
-        def tokenize_batch(texts):
-            tokenized_data = []
-            print("Tokenizing text in batches...")
-            for i in tqdm(range(0, len(texts), 300000), desc="Processing batches"):
-                batch = texts[i:i + 300000]
-                for text in tqdm(batch, desc="Tokenizing texts", leave=False):
-                    tokenized_data.extend(tokenizer.encode(text).ids)
-            return tokenized_data
-        
-        tokenized_data = tokenize_batch(merged_text)
-        
-        # Save tokenized data if path provided
-        os.makedirs(tokenized_data_path, exist_ok=True)
+            tokenizer_path = tokenizer_path + file_name
         if tokenized_data_path:
-            print(f"Saving tokenized data to {tokenized_data_path}")
-            with open(tokenized_data_path + "data.pkl", 'wb') as f:
-                pickle.dump(tokenized_data, f)
+            tokenized_data_path = tokenized_data_path + file_name
+        
+        # Load or create tokenizer
+        if tokenizer_path and os.path.exists(tokenizer_path + "tokenizer.json") and not force_retokenize:
+            print(f"Loading existing tokenizer from {tokenizer_path}")
+            tokenizer = Tokenizer.from_file(tokenizer_path + "tokenizer.json")
+        else:
+            print("Creating and training new tokenizer...")
+            tokenizer = Tokenizer(models.BPE())
+            tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+            trainer = trainers.BpeTrainer(
+                vocab_size=vocab_size, 
+                special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
+            )
+            
+            # Merge text data and apply percentage
+            merged_text = []
+            for split in ['train', 'validation', 'test']:
+                merged_text.extend([text for text in dataset[split]['text'] if text.strip()])
+            
+            total_length = len(merged_text)
+            use_length = int(total_length * (data_percentage / 100))
+            merged_text = merged_text[:use_length]
+            
+            # Train tokenizer with batches
+            def batch_iterator(dataset, batch_size=300000):
+                for i in range(0, len(dataset), batch_size):
+                    yield dataset[i:i + batch_size]
+            
+            print("Training tokenizer...")
+            tokenizer.train_from_iterator(batch_iterator(merged_text), trainer)
+            
+            if tokenizer_path:
+                os.makedirs(tokenizer_path, exist_ok=True)
+                print(f"Saving tokenizer to {tokenizer_path}")
+                tokenizer.save(tokenizer_path + "tokenizer.json")
+        
+        # Load or create tokenized data
+        if tokenized_data_path and os.path.exists(tokenized_data_path + "data.pkl") and not force_retokenize:
+            print(f"Loading existing tokenized data from {tokenized_data_path}")
+            with open(tokenized_data_path + "data.pkl", 'rb') as f:
+                tokenized_data = pickle.load(f)
+        else:
+            print("Tokenizing data...")
+            # Apply percentage to dataset before tokenizing
+            merged_text = []
+            for split in ['train', 'validation', 'test']:
+                merged_text.extend([text for text in dataset[split]['text'] if text.strip()])
+            
+            total_length = len(merged_text)
+            use_length = int(total_length * (data_percentage / 100))
+            merged_text = merged_text[:use_length]
+            
+            def tokenize_batch(texts):
+                tokenized_data = []
+                print("Tokenizing text in batches...")
+                for i in tqdm(range(0, len(texts), 300000), desc="Processing batches"):
+                    batch = texts[i:i + 300000]
+                    for text in tqdm(batch, desc="Tokenizing texts", leave=False):
+                        tokenized_data.extend(tokenizer.encode(text).ids)
+                return tokenized_data
+            
+            tokenized_data = tokenize_batch(merged_text)
+            
+            if tokenized_data_path:
+                os.makedirs(tokenized_data_path, exist_ok=True)
+                print(f"Saving tokenized data to {tokenized_data_path}")
+                with open(tokenized_data_path + "data.pkl", 'wb') as f:
+                    pickle.dump(tokenized_data, f)
+        
+        return tokenized_data, tokenizer
     
-    return tokenized_data, tokenizer
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        raise
 
 
 class WikitextShiftedDataset(Dataset):

@@ -162,8 +162,9 @@ struct InsertResult {
 struct EntropyResult {
     double entropy;
     int64_t total_count;
+    int64_t number_of_oneHots;
     py::list entropy_results; // Optional: We can add more return values if needed
-    EntropyResult(double e, int64_t c) : entropy(e), total_count(c) {}
+    EntropyResult(double e, int64_t c, int64_t o ): entropy(e), total_count(c), number_of_oneHots(o) {}
 };
 
 
@@ -187,11 +188,12 @@ private:
     std::atomic<int64_t> node_mutex_counter;
     std::map<int64_t, int> num_unique_contexts_per_level;  // int64_t for the level, int for the count
     std::map<int64_t, int> num_total_contexts_per_level;
+    std::map<int64_t, int> num_oneHots_per_level;
 
     std::map<int64_t, double> entropy_per_level;
     std::map<int64_t, double> count_per_level;
-                               
-    const size_t array_size = 100000000; // Size of the array
+    
+    const size_t array_size = 1000000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -199,7 +201,7 @@ private:
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
                                        
-    const size_t size_logcalc_memory = 50000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 100000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
     std::vector<double> logcalc_memory_entropy;
 
@@ -235,56 +237,23 @@ private:
 
     // Modify the allocate_space function to periodically update critical info
     size_t allocate_space(size_t size) {
-        
-        // size_t offset = file_size.fetch_add(size);
-        // file_size += size;
-        // if (file_size > allocated_size) {
-        //     throw std::runtime_error("Exceeded pre-allocated file size");
-        // }
-        // DEBUG_PRINT("+++++++++++++++++++++++++++++++++++++++++++++++++++");
-        // DEBUG_PRINT("allocate_space ");
-        // DEBUG_PRINT("file_size " << file_size);
-        // DEBUG_PRINT("size " << size);
         return file_size.fetch_add(size);
     }
 
     
     size_t allocate_node(int64_t parent_level) {
-        // DEBUG_PRINT("Inside allocate_node ...");
-        // DEBUG_PRINT("+++++++++++++++++++++++++++++++++++++++++++++++++++");
-        // DEBUG_PRINT("allocate_node ");
-        // DEBUG_PRINT("Locking alloc_memory_mutex");
-        // alloc_memory_mutex.lock();
-        // DEBUG_PRINT("file_size before" << file_size);
         size_t offset = allocate_space(sizeof(TrieNode));
-        // DEBUG_PRINT("file_size after" << file_size);
-        // DEBUG_PRINT("offset before " << offset);
-        // alloc_memory_mutex.unlock();
-        // DEBUG_PRINT("Unlocking alloc_memory_mutex");
         TrieNode* new_node = get_node(offset);
         new_node->node_level = parent_level + 1; 
-
-        // DEBUG_PRINT("Locking alloc_node_mutex");
         
         if (new_node->node_level <= context_length){
-            // alloc_node_mutex.lock();
-            // node_counter += 1;
-            // node_mutex_counter += 1;
-            // DEBUG_PRINT("After allocate_node node_counter is " << node_counter.load());
             new_node->node_index = node_counter.fetch_add(1) + 1;
             new_node->node_mutex_index = node_mutex_counter.fetch_add(1) + 1;
-            // alloc_node_mutex.unlock();
             ctxLen_array[new_node->node_index] = new_node->node_level;
         } else {
-            // alloc_node_mutex.lock();
-            // node_mutex_counter += 1;
             new_node->node_mutex_index = node_mutex_counter.fetch_add(1) + 1;
             new_node->node_index = -1;
-            // alloc_node_mutex.unlock();
         }
-        
-        // DEBUG_PRINT("offset after " << offset);
-        // DEBUG_PRINT("Unlocking alloc_node_mutex");
         return offset;
     }
 
@@ -458,6 +427,7 @@ public:
             // Initialize arrays with loaded data
             num_unique_contexts_per_level.clear();
             num_total_contexts_per_level.clear();
+            num_oneHots_per_level.clear();
             entropy_per_level.clear();
             count_per_level.clear();
 
@@ -469,17 +439,19 @@ public:
                 
                 for (size_t i = 0; i < num_levels; i++) {
                     int64_t level;
-                    int unique_count, total_count;
+                    int unique_count, total_count, oneHots;
                     double entropy, count;
                     
                     per_level_data.read(reinterpret_cast<char*>(&level), sizeof(int64_t));
                     per_level_data.read(reinterpret_cast<char*>(&unique_count), sizeof(int));
                     per_level_data.read(reinterpret_cast<char*>(&total_count), sizeof(int));
+                    per_level_data.read(reinterpret_cast<char*>(&oneHots), sizeof(int));
                     per_level_data.read(reinterpret_cast<char*>(&entropy), sizeof(double));
                     per_level_data.read(reinterpret_cast<char*>(&count), sizeof(double));
                     
                     num_unique_contexts_per_level[level] = unique_count;
                     num_total_contexts_per_level[level] = total_count;
+                    num_oneHots_per_level[level] = oneHots;
                     entropy_per_level[level] = entropy;
                     count_per_level[level] = count;
                 }
@@ -541,11 +513,13 @@ public:
             per_level_data.write(reinterpret_cast<const char*>(&level), sizeof(int64_t));
             int unique_count = num_unique_contexts_per_level[level];
             int total_count = num_total_contexts_per_level[level];
+            int oneHots = num_oneHots_per_level[level];
             double entropy = entropy_per_level[level];
             double count = count_per_level[level];
             
             per_level_data.write(reinterpret_cast<const char*>(&unique_count), sizeof(int));
             per_level_data.write(reinterpret_cast<const char*>(&total_count), sizeof(int));
+            per_level_data.write(reinterpret_cast<const char*>(&oneHots), sizeof(int));
             per_level_data.write(reinterpret_cast<const char*>(&entropy), sizeof(double));
             per_level_data.write(reinterpret_cast<const char*>(&count), sizeof(double));
         }
@@ -644,9 +618,9 @@ public:
                 new_node->children_offset = 0;
                 new_node->node_level = current_level + 1;
 
-                if (new_node->node_level <= context_length) {
-                    num_total_contexts_per_level[new_node->node_level]++;
-                }
+                // if (new_node->node_level <= context_length) {
+                //     num_total_contexts_per_level[new_node->node_level]++;
+                // }
 
                 // Allocate children (protected by current node's lock)
                 if (current->num_children == 0) {
@@ -719,10 +693,6 @@ public:
         // Calculate batch size per thread
         int batch_size = tensor.size(0);
         int chunk_size = std::max(1, batch_size / num_threads);
-
-        // DEBUG_PRINT("Running with " << num_threads << " threads");
-        // DEBUG_PRINT("Total batch size: " << batch_size);
-        // DEBUG_PRINT("Chunk size per thread: " << chunk_size);
 
         std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(batch_size);
         
@@ -874,30 +844,46 @@ public:
             pair.second = 0;  // Set the count to zero for each level
         }
 
-        double number_of_oneHots = 0;
+        for (auto& pair : num_oneHots_per_level) {
+            pair.second = 0;  // Set the num OneHots to zero for each level
+        }
+
+        for (auto& pair : num_total_contexts_per_level) {
+            pair.second = 0;  // Set the num OneHots to zero for each level
+        }
+
+
+        int64_t number_of_oneHots = 0;
+        num_unique_contexts = 0;
+        num_total_contexts = 0;
 
         int64_t total_counter = 0;
         int counter = 0;
         DEBUG_PRINT(node_counter);
         DEBUG_PRINT("Printing entropy: ");
+        #pragma omp parallel for reduction(+:total_entropy,total_counter,number_of_oneHots,count_per_level[:context_length+1],num_unique_contexts_per_level[:context_length+1],entropy_per_level[:context_length+1], num_oneHots_per_level[:context_length+1])
         for(int j = 1; j <= node_counter; j++){
 
             entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
-
-            if (entropy_temp == 0.0){
-                number_of_oneHots += 1;
-            }
 
             // DEBUG_PRINT(ctxCount_array[j]);
             if (ctxCount_array[j] == 0){
                 counter += 1;
                 if (counter == 100){
                     DEBUG_PRINT("Quitting since the counter is 0.");
-                    return EntropyResult(0.0, 0);
+                    return EntropyResult(0.0, 0, 0);
                 }
             }
+
+            if (entropy_temp == 0.0){
+                number_of_oneHots += ctxCount_array[j];
+                num_oneHots_per_level[ctxLen_array[j]] += ctxCount_array[j];
+            }
+
             num_unique_contexts_per_level[ctxLen_array[j]] += 1;
             entropy_per_level[ctxLen_array[j]] += entropy_temp;
+            num_total_contexts_per_level[ctxLen_array[j]] += ctxCount_array[j];
+            num_unique_contexts += 1;
             
             total_entropy += entropy_temp;
 
@@ -919,13 +905,14 @@ public:
         DEBUG_PRINT("number_of_oneHots: " << number_of_oneHots);
         DEBUG_PRINT("total_counter: " << total_counter);
 
-        num_unique_contexts = node_counter.load();
+        // num_unique_contexts = node_counter.load();
+        num_total_contexts = total_counter;
         
         // return total_entropy;  // Normalize by total number of nodes
-        return EntropyResult(total_entropy, total_counter);
+        return EntropyResult(total_entropy, total_counter, number_of_oneHots);
     }
     
-
+    
 
     EntropyResult  calculate_and_get_entropy_faster_branch() {
         DEBUG_PRINT("________________________________________________________________");
@@ -946,31 +933,47 @@ public:
             pair.second = 0;  // Set the count to zero for each level
         }
 
-        double number_of_oneHots = 0;
+        for (auto& pair : num_oneHots_per_level) {
+            pair.second = 0;  // Set the num OneHots to zero for each level
+        }
+
+        for (auto& pair : num_total_contexts_per_level) {
+            pair.second = 0;  // Set the num OneHots to zero for each level
+        }
+
+        int64_t number_of_oneHots = 0;
+
+        num_unique_contexts = 0;
+        num_total_contexts = 0;
 
         int64_t total_counter = 0;
         int counter = 0;
         DEBUG_PRINT(node_counter);
         DEBUG_PRINT("Printing entropy: ");
+        #pragma omp parallel for reduction(+:total_entropy,total_counter,number_of_oneHots,count_per_level[:context_length+1],num_unique_contexts_per_level[:context_length+1],entropy_per_level[:context_length+1], num_oneHots_per_level[:context_length+1])
         for(int j = 1; j <= node_counter; j++){
 
             if (ctxLen_array[j] >= 3){
                 entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
-
-                if (entropy_temp == 0.0){
-                    number_of_oneHots += 1;
-                }
 
                 // DEBUG_PRINT(ctxCount_array[j]);
                 if (ctxCount_array[j] == 0){
                     counter += 1;
                     if (counter == 100){
                         DEBUG_PRINT("Quitting since the counter is 0.");
-                        return EntropyResult(0.0, 0);
+                        return EntropyResult(0.0, 0, 0);
                     }
                 }
+
+                if (entropy_temp == 0.0){
+                    number_of_oneHots += ctxCount_array[j];
+                    num_oneHots_per_level[ctxLen_array[j]] += ctxCount_array[j];
+                }
+                
                 num_unique_contexts_per_level[ctxLen_array[j]] += 1;
                 entropy_per_level[ctxLen_array[j]] += entropy_temp;
+                num_total_contexts_per_level[ctxLen_array[j]] += ctxCount_array[j];
+                num_unique_contexts += 1;
                 
                 total_entropy += entropy_temp;
 
@@ -989,15 +992,16 @@ public:
             entropy_per_level[t] /= -count_per_level[t];
         }
 
-        double perc_of_oneHots = number_of_oneHots / total_counter;
+        double perc_of_oneHots = (double)number_of_oneHots / total_counter;
         DEBUG_PRINT("Percentage of OneHots is: " << perc_of_oneHots);
         DEBUG_PRINT("number_of_oneHots: " << number_of_oneHots);
         DEBUG_PRINT("total_counter: " << total_counter);
 
-        num_unique_contexts = node_counter.load();
+        // num_unique_contexts = node_counter.load();
+        num_total_contexts = total_counter;
         
         // return total_entropy;  // Normalize by total number of nodes
-        return EntropyResult(total_entropy, total_counter);
+        return EntropyResult(total_entropy, total_counter, number_of_oneHots);
     }
 
 
@@ -1072,6 +1076,11 @@ public:
         return entropy_per_level;
     }
 
+    // New method to get the number of nodes at each level
+    std::map<int64_t, int> get_oneHots_per_level() const {
+        return num_oneHots_per_level;
+    }
+
 
 };
 
@@ -1106,6 +1115,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("get_num_unique_contexts_per_level", &Trie_module_protV1::get_num_unique_contexts_per_level)
         .def("get_num_total_contexts_per_level", &Trie_module_protV1::get_num_total_contexts_per_level)
         .def("get_entropy_per_level", &Trie_module_protV1::get_entropy_per_level)
+        .def("get_oneHots_per_level", &Trie_module_protV1::get_oneHots_per_level)
         .def("calculate_and_get_entropy_faster_branch", &Trie_module_protV1::calculate_and_get_entropy_faster_branch)
         .def("calculate_and_get_entropy_faster_root", &Trie_module_protV1::calculate_and_get_entropy_faster_root)
         .def("load_metadata", &Trie_module_protV1::load_metadata)
@@ -1113,7 +1123,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     
     py::class_<EntropyResult>(m, "EntropyResult")
         .def_readonly("entropy", &EntropyResult::entropy)
-        .def_readonly("total_count", &EntropyResult::total_count);
+        .def_readonly("total_count", &EntropyResult::total_count)
+        .def_readonly("number_of_oneHots", &EntropyResult::number_of_oneHots);
 
     py::class_<InsertResult>(m, "InsertResult")
         .def_readonly("result", &InsertResult::result)

@@ -81,6 +81,7 @@ import math
 
 from Wiki_loader_memap_sharded import *
 
+from timeit import default_timer as timer
 
 
 
@@ -397,6 +398,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         "num_total_ctx_len_list": {},
         "insert_calc_time": {},
         "entropy_calc_time": {},
+        "total_count": {},
+        "num_oneHots_list": {}
     }
 
     insert_runtime = 0
@@ -406,9 +409,10 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     # Step 6: Iterate through the DataLoader and print samples
     batches_seen = 0
     for X in tqdm(dataloader):
+        # print("doing the batch")
         
         contexts_count += X.shape[0]
-
+        
         batches_seen += 1
 
         if contexts_count <= up_to_ctx_count_processed: 
@@ -420,6 +424,70 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
             execution_time_seconds = result.execution_time_ms / 1000.0
             insert_runtime += execution_time_seconds
             del X
+        
+        if contexts_count == num_examples:
+            print("contexts_count == num_examples !!! We are saving at the end as well. ")
+
+        # if (milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]) or contexts_count == num_examples:
+        if (milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]) or contexts_count == num_examples:
+            print("logging the results")
+                
+            num_ctx_seen = milestones[milestone_index]
+
+            data_log["insert_calc_time"][contexts_count] = 100                
+            print(f"Current MT Trie memory usage: {context_tree.get_memory_usage()//(1024)**3} GB")
+            
+            print(f"Inserting MT trie took: {data_log['insert_calc_time'][contexts_count]} seconds.")
+            print("_"*30)
+            
+
+            print("_"*30)
+            # start_time_entropy = time.time()
+            start_time_entropy = timer()
+            if is_root:
+                result = context_tree.calculate_and_get_entropy_faster_root()
+            else:
+                result = context_tree.calculate_and_get_entropy_faster_branch()
+            entropy_tree_new = result.entropy
+            total_count = result.total_count
+            # data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
+            data_log["entropy_calc_time"][contexts_count] = timer() - start_time_entropy
+            print("Entropy MT: " + str(entropy_tree_new))
+            data_log["entropy"][contexts_count] = entropy_tree_new
+            data_log["total_count"][contexts_count] = total_count
+            
+            print(f"Entropy Calc took: {data_log['entropy_calc_time'][contexts_count]} seconds.")
+            print("_"*30)
+
+            
+            data_log["entropy_per_ctx_len"][contexts_count] = context_tree.get_entropy_per_level()
+            data_log["num_total_ctx"][contexts_count] = context_tree.get_num_total_contexts()
+            data_log["num_unique_ctx"][contexts_count] = context_tree.get_num_unique_contexts()
+            data_log["num_unique_ctx_len_list"][contexts_count] = context_tree.get_num_unique_contexts_per_level()
+            data_log["num_total_ctx_len_list"][contexts_count] = context_tree.get_num_total_contexts_per_level()
+            data_log["num_oneHots_list"][contexts_count] = context_tree.get_oneHots_per_level()
+            
+
+            process = psutil.Process(os.getpid())
+            # print("Entropy value is: " + str(entropy_tree))
+            print('Physical RAM Used (GB):', process.memory_info().rss/(1024**3))
+            print('Physical RAM % Used (GB):', process.memory_percent())
+            print('MidPeak RAM Used (GB):', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/(1024**2))
+            print("_" * 100)
+
+
+            plot_data_log_subplots(data_log, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+            plot_calc_times(data_log, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+            # plot_entropy_perCtxLen(data_log, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len =  [t for t in range(0, args.context_length - args.root_ctx_len)])
+
+            with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
+                pickle.dump(data_log, pickle_file)
+            
+
+            milestone_index += 1
+            insert_runtime = 0
+    
+            context_tree.save_metadata()
 
 
     print("_"*30)
@@ -428,7 +496,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     # data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
     # print("Entropy faster: " + str(entropy_tree_new))
     
-    return context_tree
+    return context_tree, list(data_log["entropy_per_ctx_len"].values())[-1]
 
 
 def get_soft_label(context_tree, args, X):
@@ -627,9 +695,9 @@ if __name__ == "__main__":
     batch_size = args.batch_size
     perc_stories = args.perc_stories
 
-    ##################################################################################################################################################################
+    #################################################################################################################################################################
     save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Tries/"
-
+#
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
     # Example usage with stride
@@ -671,16 +739,14 @@ if __name__ == "__main__":
     if not os.path.exists(single_thread_folder_path + "logs_trees_cpp/"):
         os.mkdir(single_thread_folder_path + "logs_trees_cpp/")
     
-    # num_milestones = 10
-    # context_tree_ST = load_or_create_tree_single(args, single_thread_folder_path, dataloader_single, num_milestones, num_ctx)
-    # print("Single Thread Tree loading/contruction complete")
-    # dataset_entropy = context_tree_ST.calculate_and_get_entropy_faster()
-    # print("Entropy Calculated Trie: " + str(dataset_entropy))
-    # # print("Count Calculated Trie: " + str(total_count))
-    # print("_" * 100)
-
-    # input()
-
+    num_milestones = 10
+    context_tree_ST = load_or_create_tree_single(args, single_thread_folder_path, dataloader_single, num_milestones, num_ctx)
+    print("Single Thread Tree loading/contruction complete")
+    dataset_entropy = context_tree_ST.calculate_and_get_entropy_faster()
+    print("Entropy Calculated Trie: " + str(dataset_entropy))
+    # print("Count Calculated Trie: " + str(total_count))
+    print("_" * 100)
+    del context_tree_ST
 
 
 
@@ -711,7 +777,7 @@ if __name__ == "__main__":
     #     firstTwo_token_bins = update_firstTwo_count_dict(x_batch_firstTwoTokens, firstTwo_token_bins)
 
     save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Graphs/firstTokenDistributions/"
-    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%Wiki_Stride{args.stride}"
     graph_tokenFirstTwoDist_filename = f"{save_graph_folder}{filename}_firstTwoTokens.jpg"
     plot_tuple_frequency(firstTwo_token_bins, graph_tokenFirstTwoDist_filename)
 
@@ -765,12 +831,13 @@ if __name__ == "__main__":
             context_length=args.context_length,
             batch_size=args.batch_size,
             stride=args.stride,
+            token_pairs=bin_assigned_indices,
             is_root = False, 
             root_ctx_len = args.root_ctx_len
         )
         num_ctx = len(dataloader)
 
-        filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+        filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%Wiki_Stride{args.stride}"
         save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Tries/"
         folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
         folder_Tries_path = save_Trie_folder + folder_name_Tries
@@ -778,18 +845,21 @@ if __name__ == "__main__":
         args.group = group
         num_milestones = 2
         print("num_ctx: " + str(num_ctx))
-        context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = False)
+        context_tree, entropy_per_ctx_len = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = False)
 
         print("Tree loading/contruction complete")
         result = context_tree.calculate_and_get_entropy_faster_branch()
         dataset_entropy = result.entropy
         total_count = result.total_count
+        num_oneHots = result.number_of_oneHots
         print("Entropy Calculated Trie: " + str(dataset_entropy))
         print("Count Calculated Trie: " + str(total_count))
+        print("OneHots Calculated Trie: " + str(num_oneHots))
         print("_" * 100)
 
-        entropy_branches_Trie[f"Group_{group}"]={"entropy": dataset_entropy, "count": total_count}
+        entropy_branches_Trie[f"Group_{group}"]={"entropy": dataset_entropy, "count": total_count, "entrop_per_ctx_len": entropy_per_ctx_len}
         del dataloader
+        del context_tree
         
 
     
@@ -805,7 +875,7 @@ if __name__ == "__main__":
         root_ctx_len = args.root_ctx_len
     )
     num_ctx = len(dataloader)
-    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%Wiki_Stride{args.stride}"
     save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Debug_Files/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
@@ -813,29 +883,63 @@ if __name__ == "__main__":
     # args.group = group
     num_milestones = 2
     print("num_ctx: " + str(num_ctx))
-    context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = True)
+    context_tree, entropy_per_ctx_len = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = True)
+    
 
     print("Tree loading/contruction complete")
     result = context_tree.calculate_and_get_entropy_faster_root()
     dataset_entropy = result.entropy
     total_count = result.total_count
+    num_oneHots = result.number_of_oneHots
     print("Entropy Calculated Trie: " + str(dataset_entropy))
     print("Count Calculated Trie: " + str(total_count))
+    print("OneHots Calculated Trie: " + str(num_oneHots))
     print("_" * 100)
 
-    entropy_branches_Trie[f"Root"]={"entropy": dataset_entropy, "count": total_count}
+    entropy_branches_Trie[f"Root"]={"entropy": dataset_entropy, "count": total_count, "entrop_per_ctx_len": entropy_per_ctx_len}
     print("_" * 100)
     # input()
+    del context_tree
 
+    print(entropy_branches_Trie)
 
     full_entropy = 0
     full_count = 0
+    
+    full_entrop_per_ctx_len = {}
+    for ctx_len in range(0, args.context_length + 1):
+        full_entrop_per_ctx_len[ctx_len] = 0
     for group, info in entropy_branches_Trie.items():
         full_entropy += info["entropy"] * info["count"]
         full_count += info["count"]
     full_entropy = full_entropy / full_count
 
+    # for group, info in entropy_branches_Trie.items()[0:4]:
+    for group in range(0, args.num_bins):
+        group = f"Group_{group}"
+        info = entropy_branches_Trie[group]
+        # full_entropy += info["entropy"] * info["count"]
+        # full_count += info["count"]
+        for ctx_len in range(args.root_ctx_len + 1, args.context_length + 1):
+            full_entrop_per_ctx_len[ctx_len] += info["entrop_per_ctx_len"][ctx_len]
+    
+    for ctx_len in range(args.root_ctx_len + 1, args.context_length + 1):
+        full_entrop_per_ctx_len[ctx_len] /= args.num_bins
+    # print(args.context_length - args.root_ctx_len)
+    # for ctx_len in range(args.root_ctx_len + 1, args.context_length + 1):
+    #     full_entrop_per_ctx_len[ctx_len] /= info["entrop_per_ctx_len"][ctx_len]
+    
+    for ctx_len in range(1, args.root_ctx_len + 1):
+        full_entrop_per_ctx_len[ctx_len] = entropy_branches_Trie["Root"]["entrop_per_ctx_len"][ctx_len]
+
     print("Full Entropy from multiProcessed Trie:" + str(full_entropy))
     print("Full Count from multiProcessed Trie:" + str(full_count))
+    print("Full Entropy per CtxLen from multiProcessed Trie: " + str(full_entrop_per_ctx_len))
+
+    sum_entropy_per_ctx_len = 0
+    for ctx_len in range(1, args.context_length + 1):
+        sum_entropy_per_ctx_len += full_entrop_per_ctx_len[ctx_len]
+    sum_entropy_per_ctx_len /= args.context_length
+    print("Full Entropy per ctx len from multiProcessed Trie:" + str(sum_entropy_per_ctx_len))
 
 

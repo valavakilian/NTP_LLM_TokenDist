@@ -83,15 +83,62 @@ print("Importing Done")
 # CLI for constructing the dataset
 
 
+def plot_oneHot_perCtxLen(data_log, file_path, precDone, ctx_len):
+    # Extract the values for each key across document counts (assuming document count is the key)
+    doc_counts = sorted(data_log['num_oneHots_list'].keys())  # Assuming the keys are document counts
+    
+    target_ctx_lens = np.linspace(1, len(ctx_len) // 2, 16, dtype=int).tolist()
+    target_ctx_lens = [ctx_len[t] for t in target_ctx_lens]
+    target_ctx_lens.append(3)
+    target_ctx_lens.append(5)
+    target_ctx_lens.append(8)
+    target_ctx_lens = list(set(target_ctx_lens))
+    target_ctx_lens.sort()
+    # target_ctx_lens = [4,8,12,16,24,32,64]
+    
+    oneHot = [sum(data_log['num_oneHots_list'][doc][t] for t in range(1, args.context_length + 1)) / sum(data_log['num_total_ctx_len_list'][doc][t] for t in range(1, args.context_length + 1)) for doc in doc_counts]
+    oneHot_per_ctxLen = {}
+    for t in target_ctx_lens:
+        oneHot_per_ctxLen[t] = [data_log['num_oneHots_list'][doc][t] / data_log['num_total_ctx_len_list'][doc][t] for doc in doc_counts]
+    
+    # Create subplots (3 rows, 1 column)
+    fig, axs = plt.subplots(1, 1, figsize=(12, 10))
+    
+    # Plot oneHot
+    axs.plot(doc_counts, oneHot, label='Total', marker='o', color = "black")
+    for t in target_ctx_lens:
+        axs.plot(doc_counts, oneHot_per_ctxLen[t], label=f't = {t}', marker='o')
+    axs.set_xlabel('Number of Contexts Seen ')
+    axs.set_ylabel('oneHot percentage')
+    axs.set_title('oneHot over Contexts Seen(' + str(precDone) + ' % ' + 'complete)')
+    axs.grid(True, which="both", ls="--")
+    # Add text box for oneHot difference
+    textstr = f'oneHot: {oneHot[-1]:.6f}'
+    axs.text(0.05, 0.95, textstr, transform=axs.transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    axs.legend(loc='best')
+    # Adjust layout for better spacing
+    plt.tight_layout()
+    
+    # Display the plot
+    plt.savefig(file_path)
+    plt.clf()
+
+
 
 
 def plot_entropy_perCtxLen(data_log, file_path, precDone, ctx_len):
     # Extract the values for each key across document counts (assuming document count is the key)
     doc_counts = sorted(data_log['entropy'].keys())  # Assuming the keys are document counts
     
-    print(ctx_len)
     target_ctx_lens = np.linspace(1, len(ctx_len) // 2, 8, dtype=int).tolist()
     target_ctx_lens = [ctx_len[t] for t in target_ctx_lens]
+    target_ctx_lens.append(3)
+    target_ctx_lens.append(5)
+    target_ctx_lens.append(8)
+    target_ctx_lens = list(set(target_ctx_lens))
+    target_ctx_lens.sort()
     
     entropy = [data_log['entropy'][doc] for doc in doc_counts]
     entropy_per_ctxLen = {}
@@ -99,18 +146,17 @@ def plot_entropy_perCtxLen(data_log, file_path, precDone, ctx_len):
         entropy_per_ctxLen[t] = [data_log['entropy_per_ctx_len'][doc][t] for doc in doc_counts]
     
     # Create subplots (3 rows, 1 column)
-    fig, axs = plt.subplots(1, 1, figsize=(5, 4))
+    fig, axs = plt.subplots(1, 1, figsize=(12, 9))
 
-    
     # Plot entropy
     axs.plot(doc_counts, entropy, label='Total', marker='o', color = "black")
     for t in target_ctx_lens:
         axs.plot(doc_counts, entropy_per_ctxLen[t], label=f't = {t}', marker='o')
     axs.set_xscale('log')
     axs.set_yscale('log')
-    axs.set_xlabel('Number of Documents (log scale)')
+    axs.set_xlabel('Number of Contexts Seen (log scale)')
     axs.set_ylabel('Entropy (log scale)')
-    axs.set_title('Entropy over Documents(' + str(precDone) + ' % ' + 'complete)')
+    axs.set_title('Entropy over Contexts Seen(' + str(precDone) + ' % ' + 'complete)')
     axs.grid(True, which="both", ls="--")
     # Add text box for entropy difference
     textstr = f'Entropy: {entropy[-1]:.6f}'
@@ -142,9 +188,9 @@ def plot_data_log_subplots(data_log, file_path, precDone):
     axs[0].plot(doc_counts, entropy, label='Entropy Old', marker='o', color = "green")
     axs[0].set_xscale('log')
     axs[0].set_yscale('log')
-    axs[0].set_xlabel('Number of Documents (log scale)')
+    axs[0].set_xlabel('Number of Contexts Seen (log scale)')
     axs[0].set_ylabel('Entropy (log scale)')
-    axs[0].set_title('Entropy over Documents(' + str(precDone) + ' % ' + 'complete)')
+    axs[0].set_title('Entropy over Contexts Seen(' + str(precDone) + ' % ' + 'complete)')
     axs[0].grid(True, which="both", ls="--")
     # Add text box for entropy difference
     textstr = f'Entropy: {entropy[-1]:.6f}'
@@ -155,20 +201,89 @@ def plot_data_log_subplots(data_log, file_path, precDone):
     axs[1].plot(doc_counts, num_total_ctx, label='Total Contexts', marker='s', color='orange')
     axs[1].set_xscale('log')
     axs[1].set_yscale('log')
-    axs[1].set_xlabel('Number of Documents (log scale)')
+    axs[1].set_xlabel('Number of Contexts Seen (log scale)')
     axs[1].set_ylabel('Total Contexts (log scale)')
-    axs[1].set_title('Total Contexts over Documents')
+    axs[1].set_title('Total Contexts over Contexts Seen')
     axs[1].grid(True, which="both", ls="--")
     
     # Plot num_unique_ctx
     axs[2].plot(doc_counts, num_unique_ctx, label='Unique Contexts', marker='^', color='green')
     axs[2].set_xscale('log')
     axs[2].set_yscale('log')
-    axs[2].set_xlabel('Number of Documents (log scale)')
+    axs[2].set_xlabel('Number of Contexts Seen (log scale)')
     axs[2].set_ylabel('Unique Contexts (log scale)')
-    axs[2].set_title('Unique Contexts over Documents')
+    axs[2].set_title('Unique Contexts over Contexts Seen')
     axs[2].grid(True, which="both", ls="--")
     
+    # Adjust layout for better spacing
+    plt.tight_layout()
+    
+    # Display the plot
+    plt.savefig(file_path)
+    plt.clf()
+
+
+
+
+
+
+def plot_data_EntropyTotal(data_log, file_path, precDone):
+    # Extract the values for each key across document counts (assuming document count is the key)
+    doc_counts = sorted(data_log['entropy'].keys())  # Assuming the keys are document counts
+    
+    entropy = [data_log['entropy'][doc] for doc in doc_counts]
+    num_total_ctx = [data_log['num_total_ctx'][doc] for doc in doc_counts]
+    num_unique_ctx = [data_log['num_unique_ctx'][doc] for doc in doc_counts]
+    
+    # Create subplots (3 rows, 1 column)
+    fig, axs = plt.subplots(1, 1, figsize=(12, 8))
+
+    
+    # Plot entropy
+    axs.plot(doc_counts, entropy, label='Entropy Old', marker='o', color = "green")
+    axs.set_xscale('log')
+    axs.set_yscale('log')
+    axs.set_xlabel('Number of Contexts Seen (log scale)')
+    axs.set_ylabel('Entropy (log scale)')
+    axs.set_title('Entropy over Contexts Seen(' + str(precDone) + ' % ' + 'complete)')
+    axs.grid(True, which="both", ls="--")
+    # Add text box for entropy difference
+    textstr = f'Entropy: {entropy[-1]:.6f}'
+    axs.text(0.05, 0.95, textstr, transform=axs.transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    # Adjust layout for better spacing
+    plt.tight_layout()
+    
+    # Display the plot
+    plt.savefig(file_path)
+    plt.clf()
+
+
+
+def plot_data_UniqueTotal(data_log, file_path, precDone):
+    # Extract the values for each key across document counts (assuming document count is the key)
+    doc_counts = sorted(data_log['entropy'].keys())  # Assuming the keys are document counts
+    
+    entropy = [data_log['entropy'][doc] for doc in doc_counts]
+    num_total_ctx = [data_log['num_total_ctx'][doc] for doc in doc_counts]
+    num_unique_ctx = [data_log['num_unique_ctx'][doc] for doc in doc_counts]
+    
+    # Create subplots (3 rows, 1 column)
+    fig, axs = plt.subplots(1, 1, figsize=(12, 8))
+
+    
+    # Plot entropy
+    axs.plot(doc_counts, num_total_ctx, label='Entropy Old', marker='o', color = "green")
+    axs.set_xscale('log')
+    axs.set_yscale('log')
+    axs.set_xlabel('Number of Contexts Seen (log scale)')
+    axs.set_ylabel('Num Unique (log scale)')
+    axs.set_title('Num Unique over Contexts Seen(' + str(precDone) + ' % ' + 'complete)')
+    axs.grid(True, which="both", ls="--")
+    # Add text box for entropy difference
+    textstr = f'Num Unique: {num_unique_ctx[-1]:.6f}'
+    axs.text(0.05, 0.95, textstr, transform=axs.transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     # Adjust layout for better spacing
     plt.tight_layout()
     
@@ -198,7 +313,7 @@ def plot_calc_times(data_log, file_path, precDone):
     plt.yscale('log')
     
     # Add labels and title
-    plt.xlabel('Number of Documents (log scale)')
+    plt.xlabel('Number of Contexts Seen (log scale)')
     plt.ylabel('Calculation Time (log scale)')
     plt.title('Entropy Calc Time and Insert Time over #Ctx Seen (' + str(precDone) + ' % ' + 'complete)')
 
@@ -320,28 +435,34 @@ if __name__ == "__main__":
         "num_total_ctx_len_list": {},
         "insert_calc_time": {},
         "entropy_calc_time": {},
+        "num_oneHots_len_list": {},
+        "num_oneHots_list": {}
     }
-
+    
     for i in range(0, len(list(full_trie_logs_dict["groupRoot"]["entropy"].keys()))):
         entropy_iteration = 0
         count_iteration = 0
         num_total_ctx_iteration = 0
         num_unique_ctx_iteration = 0
+        total_total_count = 0
 
         entropy_root = list(full_trie_logs_dict["groupRoot"]["entropy"].values())[i]
-        count_root = list(full_trie_logs_dict["groupRoot"]["entropy"].keys())[i]
-        entropy_iteration += entropy_root * count_root
-        count_iteration += count_root
+        count_root = list(full_trie_logs_dict["groupRoot"]["num_total_ctx"].values())[i]
+        total_count = list(full_trie_logs_dict["groupRoot"]["total_count"].values())[i]
+        entropy_iteration += entropy_root * total_count
+        count_iteration += total_count
         num_total_ctx_iteration += list(full_trie_logs_dict["groupRoot"]["num_total_ctx"].values())[i]
         num_unique_ctx_iteration += list(full_trie_logs_dict["groupRoot"]["num_unique_ctx"].values())[i]
         
         entropy_per_ctx_len_dict = {}
         num_unique_ctx_len_list_dict = {}
         num_total_ctx_len_list_dict = {}
+        num_oneHots_list_dict = {}
         for ctx_len in range(1, args.context_length + 1):
             entropy_per_ctx_len_dict[ctx_len] = 0
             num_unique_ctx_len_list_dict[ctx_len] = 0
             num_total_ctx_len_list_dict[ctx_len] = 0
+            num_oneHots_list_dict[ctx_len] = 0
         
         for ctx_len in range(1, args.root_ctx_len + 1):
             # print(full_trie_logs_dict["groupRoot"]["entropy_per_ctx_len"])
@@ -351,10 +472,13 @@ if __name__ == "__main__":
             num_unique_ctx_len_list_dict[ctx_len] = list(full_trie_logs_dict["groupRoot"]["num_unique_ctx_len_list"].values())[i][ctx_len]
             num_total_ctx_len_list_dict[ctx_len] = list(full_trie_logs_dict["groupRoot"]["num_total_ctx_len_list"].values())[i][ctx_len]
 
-            if ctx_len == args.root_ctx_len:
-                entropy_per_ctx_len_dict[ctx_len] = list(full_trie_logs_dict["groupRoot"]["entropy_per_ctx_len"].values())[i][ctx_len] / num_total_ctx_len_list_dict[ctx_len]
-            else:
-                entropy_per_ctx_len_dict[ctx_len] = list(full_trie_logs_dict["groupRoot"]["entropy_per_ctx_len"].values())[i][ctx_len] 
+            # if ctx_len == args.root_ctx_len:
+            #     entropy_per_ctx_len_dict[ctx_len] = list(full_trie_logs_dict["groupRoot"]["entropy_per_ctx_len"].values())[i][ctx_len] / num_total_ctx_len_list_dict[ctx_len]
+            # else:
+            entropy_per_ctx_len_dict[ctx_len] = list(full_trie_logs_dict["groupRoot"]["entropy_per_ctx_len"].values())[i][ctx_len] 
+
+            num_oneHots_list_dict[ctx_len] = list(full_trie_logs_dict["groupRoot"]["num_oneHots_list"].values())[i][ctx_len]
+            
 
         # input("HERE")
 
@@ -370,9 +494,10 @@ if __name__ == "__main__":
 
             # print(len(list(full_trie_logs_dict["group"+str(b)]["entropy"].values())))
             entropy_bin = list(full_trie_logs_dict["group"+str(b)]["entropy"].values())[i]
-            count_bin = list(full_trie_logs_dict["group"+str(b)]["entropy"].keys())[i]
-            entropy_iteration += entropy_bin * count_bin
-            count_iteration += count_bin
+            count_bin = list(full_trie_logs_dict["group"+str(b)]["num_total_ctx"].values())[i]
+            total_count = list(full_trie_logs_dict["group"+str(b)]["total_count"].values())[i]
+            entropy_iteration += entropy_bin * total_count
+            count_iteration += total_count
 
             num_total_ctx_iteration += list(full_trie_logs_dict["group"+str(b)]["num_total_ctx"].values())[i]
             num_unique_ctx_iteration += list(full_trie_logs_dict["group"+str(b)]["num_unique_ctx"].values())[i]
@@ -384,11 +509,13 @@ if __name__ == "__main__":
                 num_total_ctx_len_list_dict[ctx_len] += list(full_trie_logs_dict["group"+str(b)]["num_total_ctx_len_list"].values())[i][ctx_len]
                 num_unique_ctx_len_list_dict[ctx_len] += list(full_trie_logs_dict["group"+str(b)]["num_unique_ctx_len_list"].values())[i][ctx_len]
 
-                if ctx_len == args.context_length:
-                    entropy_per_ctx_len_dict[ctx_len] += list(full_trie_logs_dict["group"+str(b)]["entropy_per_ctx_len"].values())[i][ctx_len] 
-                else:
-                    entropy_per_ctx_len_dict[ctx_len] += list(full_trie_logs_dict["group"+str(b)]["entropy_per_ctx_len"].values())[i][ctx_len] * num_total_ctx_len_list_dict[ctx_len]
+                # if ctx_len == args.context_length:
+                #     entropy_per_ctx_len_dict[ctx_len] += list(full_trie_logs_dict["group"+str(b)]["entropy_per_ctx_len"].values())[i][ctx_len] 
+                # else:
+                entropy_per_ctx_len_dict[ctx_len] += list(full_trie_logs_dict["group"+str(b)]["entropy_per_ctx_len"].values())[i][ctx_len] * num_total_ctx_len_list_dict[ctx_len]
 
+                num_oneHots_list_dict[ctx_len] += list(full_trie_logs_dict["group"+str(b)]["num_oneHots_list"].values())[i][ctx_len]
+                
 
             sum_bins += count_bin
             if i == 98:
@@ -412,13 +539,23 @@ if __name__ == "__main__":
         data_log_MT["num_unique_ctx_len_list"][count_iteration] = num_unique_ctx_len_list_dict
         data_log_MT["num_total_ctx_len_list"][count_iteration] = num_total_ctx_len_list_dict
 
+        data_log_MT["num_oneHots_list"][count_iteration] = num_oneHots_list_dict
+        
+
+    print(list(data_log_MT["entropy"].values())[-1])
+    print(list(data_log_MT["total_count"].values())[-1])
+    print(sum(list(data_log_MT["entropy_per_ctx_len"].values())[-1].values()) /args.context_length)
+    print(sum(list(data_log_MT["num_total_ctx_len_list"].values())[-1].values()))
+    print(list(data_log_MT["entropy_per_ctx_len"].values())[-1])
+    print(list(data_log_MT["num_total_ctx_len_list"].values())[-1])
+    # input()
 
     save_full_graph_folder = folder_Tries_path + "full_graphs/"
     if not os.path.exists(save_full_graph_folder):
         os.mkdir(save_full_graph_folder)
     plot_data_log_subplots(data_log_MT, save_full_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = 100)
     plot_entropy_perCtxLen(data_log_MT, save_full_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = 100, ctx_len = [t for t in range(1, args.context_length + 1)])
-
-    
-
+    plot_oneHot_perCtxLen(data_log_MT, save_full_graph_folder + f"OneHots_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = 100, ctx_len = [t for t in range(1, args.context_length + 1)])
+    plot_data_EntropyTotal(data_log_MT, save_full_graph_folder + f"EntropyTotal_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = 100)
+    plot_data_UniqueTotal(data_log_MT, save_full_graph_folder + f"NumUniqueTotal_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = 100)
 

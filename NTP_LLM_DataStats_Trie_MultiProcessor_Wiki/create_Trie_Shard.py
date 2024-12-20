@@ -84,7 +84,7 @@ print("Importing Done")
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
 
-
+SIZE_NODE_BYTES = 56 
 
 
 def plot_entropy_perCtxLen(data_log, file_path, precDone, ctx_len):
@@ -260,6 +260,9 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     save_logs_folder =  bin_folder_path + "logs_trees_cpp/"
     save_logs_filename_MT = f"Trie{args.group}.pkl"
     memap_filename_MT = f"{save_tree_folder}Trie{args.group}_MT"
+
+
+    Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * args.context_length * 5 // (1024**3)), 5)
     
 
        
@@ -278,7 +281,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         return context_tree_MT
     else:
         print("File does not exist or forced to Trie recreation requested.")
-        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 50, args.context_length)
+        print(f"Trie is of size {Trie_predicted_size} GB")
+        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, Trie_predicted_size, args.context_length)
 
 
 
@@ -292,6 +296,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         "num_total_ctx_len_list": {},
         "insert_calc_time": {},
         "entropy_calc_time": {},
+        "num_oneHots_list": {}
     }
 
 
@@ -361,6 +366,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 data_log_MT["num_unique_ctx"][contexts_count] = context_tree_MT.get_num_unique_contexts()
                 data_log_MT["num_unique_ctx_len_list"][contexts_count] = context_tree_MT.get_num_unique_contexts_per_level()
                 data_log_MT["num_total_ctx_len_list"][contexts_count] = context_tree_MT.get_num_total_contexts_per_level()
+                data_log_MT["num_oneHots_list"][contexts_count] = context_tree_MT.get_oneHots_per_level()
+                
 
                 process = psutil.Process(os.getpid())
                 # print("Entropy value is: " + str(entropy_tree))
