@@ -78,6 +78,7 @@ from timeit import default_timer as timer
 
 print("Importing Done")
 
+SIZE_NODE_BYTES = 56 
 
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
@@ -252,6 +253,12 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     milestones = generate_equal_spaced_points(num_examples, num_milestones)[1:] # exclude zero
     print("milestones are : " + str(milestones))
 
+    if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
+        os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
+    if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
+        os.mkdir(bin_folder_path + "graph_trees_cpp/")
+    if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
+        os.mkdir(bin_folder_path + "logs_trees_cpp/")
 
     save_tree_folder =  bin_folder_path + "context_trees_memap_cpp/"
     save_graph_folder = bin_folder_path + "graph_trees_cpp/"
@@ -259,6 +266,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     save_logs_filename_MT = f"TrieRoot.pkl"
     memap_filename_MT = f"{save_tree_folder}TrieRoot_MT"
     
+
+    Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.root_ctx_len + 1) * 20 // (1024**3)), 6)
 
        
     exp_was_initiated = False
@@ -276,7 +285,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         return context_tree_MT
     else:
         print("File does not exist or forced to Trie recreation requested.")
-        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 50, args.root_ctx_len)
+        print(f"Trie is of size {Trie_predicted_size} GB")
+        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, Trie_predicted_size, args.root_ctx_len)
 
 
 
@@ -291,7 +301,9 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         "insert_calc_time": {},
         "entropy_calc_time": {},
         "num_oneHots_len_list": {},
-        "num_oneHots_list": {}
+        "num_oneHots_list": {},
+        "supSize_list": {},
+        "uniformity_list": {}
     }
 
 
@@ -363,6 +375,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 data_log_MT["num_unique_ctx_len_list"][contexts_count] = context_tree_MT.get_num_unique_contexts_per_level()
                 data_log_MT["num_total_ctx_len_list"][contexts_count] = context_tree_MT.get_num_total_contexts_per_level()
                 data_log_MT["num_oneHots_list"][contexts_count] = context_tree_MT.get_oneHots_per_level()
+                data_log_MT["supSize_list"][contexts_count] = context_tree_MT.get_supSize_per_level()
+                data_log_MT["uniformity_list"][contexts_count] = context_tree_MT.get_uniformity_per_level()
                 
 
                 process = psutil.Process(os.getpid())
@@ -445,7 +459,8 @@ if __name__ == "__main__":
 
 
     # Make the folders for the root and where the tries are saved
-    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
+    # save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
+    save_Trie_folder = "./Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
     
@@ -460,6 +475,11 @@ if __name__ == "__main__":
     save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
+
+    local_bin_folder_path = "./Trie_info/"
+    if not os.path.exists(local_bin_folder_path):
+        os.mkdir(local_bin_folder_path)
+    print(f"Directory exists: {os.path.exists(local_bin_folder_path)}")
 
     bin_folder_path = folder_Tries_path + f"group_root/"
     # bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
@@ -495,7 +515,7 @@ if __name__ == "__main__":
     print("Dataloader Created")
 
     num_milestones = 100    
-    context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx)
+    context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)
     print("Tree loading/contruction complete")
     result = context_tree.calculate_and_get_entropy_faster_root()
     dataset_entropy = result.entropy

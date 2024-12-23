@@ -192,6 +192,8 @@ private:
 
     std::map<int64_t, double> entropy_per_level;
     std::map<int64_t, double> count_per_level;
+    std::map<int64_t, double> supSize_array_level;
+    std::map<int64_t, double> uniformity_array_level;
     
     const size_t array_size = 1000000000; // Size of the array
     // std::vector<double> countLog_array;
@@ -200,6 +202,7 @@ private:
     MemMapArray<double> countLog_array;
     MemMapArray<int> ctxLen_array;
     MemMapArray<int> ctxCount_array;
+    MemMapArray<int> supSize_array;
                                        
     const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
@@ -339,7 +342,7 @@ private:
 public:
     Trie_module_protV1(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
     : filename(fname + ".bin"), context_length(context_length), countLog_array(fname + "_countLog_arr.dat", array_size), 
-    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size)
+    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size), supSize_array(fname + "_supSize_arr.dat", array_size)
     , logcalc_memory_insert(size_logcalc_memory, -1), logcalc_memory_entropy(size_logcalc_memory, -1), mutex_array_lock(array_size) {
         allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
         fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
@@ -391,6 +394,7 @@ public:
         countLog_array(fname + "_countLog_arr.dat"), 
         ctxLen_array(fname + "_ctxLen_arr.dat"), 
         ctxCount_array(fname + "_ctxCount_arr.dat"),
+        supSize_array(fname + "_supSize_arr.dat", array_size),
         logcalc_memory_insert(size_logcalc_memory, -1), 
         logcalc_memory_entropy(size_logcalc_memory, -1), 
         mutex_array_lock(array_size) {
@@ -430,6 +434,8 @@ public:
             num_oneHots_per_level.clear();
             entropy_per_level.clear();
             count_per_level.clear();
+            supSize_array_level.clear();
+            uniformity_array_level.clear();
 
             // Load the arrays from their respective files
             std::ifstream per_level_data(fname + "_level_data.bin", std::ios::binary);
@@ -440,7 +446,7 @@ public:
                 for (size_t i = 0; i < num_levels; i++) {
                     int64_t level;
                     int unique_count, total_count, oneHots;
-                    double entropy, count;
+                    double entropy, count, supSize, uniformity;
                     
                     per_level_data.read(reinterpret_cast<char*>(&level), sizeof(int64_t));
                     per_level_data.read(reinterpret_cast<char*>(&unique_count), sizeof(int));
@@ -448,12 +454,16 @@ public:
                     per_level_data.read(reinterpret_cast<char*>(&oneHots), sizeof(int));
                     per_level_data.read(reinterpret_cast<char*>(&entropy), sizeof(double));
                     per_level_data.read(reinterpret_cast<char*>(&count), sizeof(double));
+                    per_level_data.read(reinterpret_cast<char*>(&supSize), sizeof(double));
+                    per_level_data.read(reinterpret_cast<char*>(&uniformity), sizeof(double));
                     
                     num_unique_contexts_per_level[level] = unique_count;
                     num_total_contexts_per_level[level] = total_count;
                     num_oneHots_per_level[level] = oneHots;
                     entropy_per_level[level] = entropy;
                     count_per_level[level] = count;
+                    supSize_array_level[level] = supSize;
+                    uniformity_array_level[level] = uniformity;
                 }
                 per_level_data.close();
             }
@@ -516,12 +526,16 @@ public:
             int oneHots = num_oneHots_per_level[level];
             double entropy = entropy_per_level[level];
             double count = count_per_level[level];
+            double supSize = supSize_array_level[level];
+            double uniformity = uniformity_array_level[level];
             
             per_level_data.write(reinterpret_cast<const char*>(&unique_count), sizeof(int));
             per_level_data.write(reinterpret_cast<const char*>(&total_count), sizeof(int));
             per_level_data.write(reinterpret_cast<const char*>(&oneHots), sizeof(int));
             per_level_data.write(reinterpret_cast<const char*>(&entropy), sizeof(double));
             per_level_data.write(reinterpret_cast<const char*>(&count), sizeof(double));
+            per_level_data.write(reinterpret_cast<const char*>(&supSize), sizeof(double));
+            per_level_data.write(reinterpret_cast<const char*>(&uniformity), sizeof(double));
         }
         per_level_data.close();
 
@@ -634,6 +648,7 @@ public:
 
                 insert_child(current, value, new_node_offset);
                 current_offset = new_node_offset;
+                supSize_array[current->node_index] += 1;
             } else {
                 current_offset = get_children(current)[child_index].second;
             }
@@ -844,6 +859,14 @@ public:
             pair.second = 0;  // Set the count to zero for each level
         }
 
+        for (auto& pair : supSize_array_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+
+        for (auto& pair : uniformity_array_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+
         for (auto& pair : num_oneHots_per_level) {
             pair.second = 0;  // Set the num OneHots to zero for each level
         }
@@ -878,6 +901,8 @@ public:
             if (entropy_temp == 0.0){
                 number_of_oneHots += ctxCount_array[j];
                 num_oneHots_per_level[ctxLen_array[j]] += ctxCount_array[j];
+            } else {
+                uniformity_array_level[ctxLen_array[j]] += ctxCount_array[j] * entropy_temp / log(supSize_array[j]);
             }
 
             num_unique_contexts_per_level[ctxLen_array[j]] += 1;
@@ -888,7 +913,9 @@ public:
             total_entropy += entropy_temp;
 
             total_counter += ctxCount_array[j];
-            count_per_level[ctxLen_array[j]] += ctxCount_array[j];            
+            count_per_level[ctxLen_array[j]] += ctxCount_array[j];     
+            supSize_array_level[ctxLen_array[j]] += supSize_array[j];
+
 
         }  
 
@@ -898,6 +925,8 @@ public:
         total_entropy = -total_entropy / total_counter;
         for(int t = 0; t <= context_length ; t++){
             entropy_per_level[t] /= -count_per_level[t];
+            supSize_array_level[t] /= count_per_level[t];
+            uniformity_array_level[t] /= count_per_level[t];
         }
 
         double perc_of_oneHots = number_of_oneHots / total_counter;
@@ -941,6 +970,14 @@ public:
             pair.second = 0;  // Set the num OneHots to zero for each level
         }
 
+        for (auto& pair : supSize_array_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+
+        for (auto& pair : uniformity_array_level) {
+            pair.second = 0;  // Set the count to zero for each level
+        }
+
         int64_t number_of_oneHots = 0;
 
         num_unique_contexts = 0;
@@ -950,7 +987,7 @@ public:
         int counter = 0;
         DEBUG_PRINT(node_counter);
         DEBUG_PRINT("Printing entropy: ");
-        #pragma omp parallel for reduction(+:total_entropy,total_counter,number_of_oneHots,count_per_level[:context_length+1],num_unique_contexts_per_level[:context_length+1],entropy_per_level[:context_length+1], num_oneHots_per_level[:context_length+1])
+        #pragma omp parallel for reduction(+:total_entropy,total_counter,number_of_oneHots,count_per_level[:context_length+1],supSize_array_level[:context_length+1],num_unique_contexts_per_level[:context_length+1],entropy_per_level[:context_length+1], num_oneHots_per_level[:context_length+1])
         for(int j = 1; j <= node_counter; j++){
 
             if (ctxLen_array[j] >= 3){
@@ -968,6 +1005,8 @@ public:
                 if (entropy_temp == 0.0){
                     number_of_oneHots += ctxCount_array[j];
                     num_oneHots_per_level[ctxLen_array[j]] += ctxCount_array[j];
+                } else {
+                    uniformity_array_level[ctxLen_array[j]] += ctxCount_array[j] * entropy_temp / log(supSize_array[j]);
                 }
                 
                 num_unique_contexts_per_level[ctxLen_array[j]] += 1;
@@ -979,6 +1018,7 @@ public:
 
                 total_counter += ctxCount_array[j];
                 count_per_level[ctxLen_array[j]] += ctxCount_array[j];
+                supSize_array_level[ctxLen_array[j]] += supSize_array[j];
             }
             
 
@@ -990,6 +1030,8 @@ public:
         total_entropy = -total_entropy / total_counter;
         for(int t = 0; t <= context_length ; t++){
             entropy_per_level[t] /= -count_per_level[t];
+            supSize_array_level[t] /= count_per_level[t];
+            uniformity_array_level[t] /= count_per_level[t];
         }
 
         double perc_of_oneHots = (double)number_of_oneHots / total_counter;
@@ -1081,6 +1123,15 @@ public:
         return num_oneHots_per_level;
     }
 
+    std::map<int64_t, double> get_supSize_per_level() const {
+        return supSize_array_level;
+    }
+
+    std::map<int64_t, double> get_uniformity_per_level() const {
+        return uniformity_array_level;
+    }
+
+
 
 };
 
@@ -1116,6 +1167,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("get_num_total_contexts_per_level", &Trie_module_protV1::get_num_total_contexts_per_level)
         .def("get_entropy_per_level", &Trie_module_protV1::get_entropy_per_level)
         .def("get_oneHots_per_level", &Trie_module_protV1::get_oneHots_per_level)
+        .def("get_supSize_per_level", &Trie_module_protV1::get_supSize_per_level)
+        .def("get_uniformity_per_level", &Trie_module_protV1::get_uniformity_per_level)
         .def("calculate_and_get_entropy_faster_branch", &Trie_module_protV1::calculate_and_get_entropy_faster_branch)
         .def("calculate_and_get_entropy_faster_root", &Trie_module_protV1::calculate_and_get_entropy_faster_root)
         .def("load_metadata", &Trie_module_protV1::load_metadata)

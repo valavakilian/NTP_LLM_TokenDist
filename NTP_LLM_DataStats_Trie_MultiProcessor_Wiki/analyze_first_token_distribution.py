@@ -525,12 +525,12 @@ if __name__ == "__main__":
         bin_folder_path = folder_Tries_path + f"group{b}/"
         if not os.path.exists(bin_folder_path):
             os.mkdir(bin_folder_path)
-        if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
-            os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
-        if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
-            os.mkdir(bin_folder_path + "graph_trees_cpp/")
-        if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
-            os.mkdir(bin_folder_path + "logs_trees_cpp/")
+        # if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
+        #     os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
+        # if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
+        #     os.mkdir(bin_folder_path + "graph_trees_cpp/")
+        # if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
+        #     os.mkdir(bin_folder_path + "logs_trees_cpp/")
 
         bin_assigned_indices = bins[b]
         np.save(bin_folder_path + 'indices.npy', bin_assigned_indices)
@@ -539,12 +539,12 @@ if __name__ == "__main__":
     bin_folder_path = folder_Tries_path + f"group_root/"
     if not os.path.exists(bin_folder_path):
         os.mkdir(bin_folder_path)
-    if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
-        os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
-    if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
-        os.mkdir(bin_folder_path + "graph_trees_cpp/")
-    if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
-        os.mkdir(bin_folder_path + "logs_trees_cpp/")
+    # if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
+    #     os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
+    # if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
+    #     os.mkdir(bin_folder_path + "graph_trees_cpp/")
+    # if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
+    #     os.mkdir(bin_folder_path + "logs_trees_cpp/")
 
 
 

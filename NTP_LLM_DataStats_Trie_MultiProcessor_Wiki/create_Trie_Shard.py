@@ -254,6 +254,12 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     milestones = generate_equal_spaced_points(num_examples, num_milestones)[1:] # exclude zero
     print("milestones are : " + str(milestones))
 
+    if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
+        os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
+    if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
+        os.mkdir(bin_folder_path + "graph_trees_cpp/")
+    if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
+        os.mkdir(bin_folder_path + "logs_trees_cpp/")
 
     save_tree_folder =  bin_folder_path + "context_trees_memap_cpp/"
     save_graph_folder = bin_folder_path + "graph_trees_cpp/"
@@ -262,7 +268,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     memap_filename_MT = f"{save_tree_folder}Trie{args.group}_MT"
 
 
-    Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * args.context_length * 5 // (1024**3)), 5)
+    Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.context_length + 1) * 5 // (1024**3)), 6)
     
 
        
@@ -296,7 +302,9 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
         "num_total_ctx_len_list": {},
         "insert_calc_time": {},
         "entropy_calc_time": {},
-        "num_oneHots_list": {}
+        "num_oneHots_list": {},
+        "supSize_list": {},
+        "uniformity_list": {}
     }
 
 
@@ -367,6 +375,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 data_log_MT["num_unique_ctx_len_list"][contexts_count] = context_tree_MT.get_num_unique_contexts_per_level()
                 data_log_MT["num_total_ctx_len_list"][contexts_count] = context_tree_MT.get_num_total_contexts_per_level()
                 data_log_MT["num_oneHots_list"][contexts_count] = context_tree_MT.get_oneHots_per_level()
+                data_log_MT["supSize_list"][contexts_count] = context_tree_MT.get_supSize_per_level()
+                data_log_MT["uniformity_list"][contexts_count] = context_tree_MT.get_uniformity_per_level()
                 
 
                 process = psutil.Process(os.getpid())
@@ -458,6 +468,11 @@ if __name__ == "__main__":
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
     bin_folder_path = folder_Tries_path + f"group{args.group}/"
+
+    local_bin_folder_path = "./Trie_info/"
+    if not os.path.exists(local_bin_folder_path):
+        os.mkdir(local_bin_folder_path)
+    print(f"Directory exists: {os.path.exists(local_bin_folder_path)}")
     bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
 
 
@@ -495,7 +510,7 @@ if __name__ == "__main__":
     print("Dataloader Created")
 
     num_milestones = 100    
-    context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx)
+    context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)
     print("Tree loading/contruction complete")
     result = context_tree.calculate_and_get_entropy_faster_branch()
     dataset_entropy = result.entropy

@@ -418,6 +418,7 @@ if __name__ == "__main__":
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")
+    parser.add_argument("--loss_fn", type=str, default="CE", help="Step size")
     parser.add_argument("--LoadTrieFromFile", type=bool, default=True, help="Load from existing file")
     args = parser.parse_args()
 
@@ -526,7 +527,7 @@ if __name__ == "__main__":
     print("Dataloader Created")
 
     num_milestones = 10
-    memap_filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}"
+    memap_filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%TS_Stride{args.stride}_{args.loss_fn}loss"
     context_tree = load_or_create_tree(args, memap_filename, dataloader, num_milestones, num_ctx)
     print("Tree loading/contruction complete")
     dataset_entropy = context_tree.calculate_and_get_entropy_faster()
@@ -588,7 +589,7 @@ if __name__ == "__main__":
     scheduler_soft_label = WarmupScheduler(optimizer_soft_label, scheduler_soft_label, warmup_epochs, get_lr_multiplier)
 
     # Loss function
-    loss_fn = CrossEntropyLoss(reduction = "sum")
+    # loss_fn = CrossEntropyLoss(reduction = "sum")
 
 
     loss_one_hot_list = []
@@ -637,36 +638,64 @@ if __name__ == "__main__":
             # print("Soft label sums:", y_soft_label.sum(dim=-1)[0,:5])
             
             
-            # Forward pass for one hot model
-            optimizer_one_hot.zero_grad()
-            outputs_one_hot = model_one_hot(x_batch)
-            pred_logits_one_hot = outputs_one_hot.logits
-            log_probs_one_hot = F.log_softmax(pred_logits_one_hot, dim=-1)
-            loss = -(y_one_hot * log_probs_one_hot).sum() / (x_batch.shape[0] * x_batch.shape[1])
-            loss.backward()
-            optimizer_one_hot.step()
-            total_loss_one_hot += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
-            loss_one_hot_list_iter.append(loss.item())
-            loss = 0
-            
+            if args.loss_fn == "CE":
+                # Forward pass for one hot model
+                optimizer_one_hot.zero_grad()
+                outputs_one_hot = model_one_hot(x_batch)
+                pred_logits_one_hot = outputs_one_hot.logits
+                log_probs_one_hot = F.log_softmax(pred_logits_one_hot, dim=-1)
+                loss = -(y_one_hot * log_probs_one_hot).sum() / (x_batch.shape[0] * x_batch.shape[1])
+                loss.backward()
+                optimizer_one_hot.step()
+                total_loss_one_hot += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
+                loss_one_hot_list_iter.append(loss.item())
+                loss = 0
+                
 
-            # Forward pass for soft label model
-            optimizer_soft_label.zero_grad()
-            outputs_soft_label = model_soft_label(x_batch)
-            pred_logits_soft_label = outputs_soft_label.logits
-            log_probs_soft_label = F.log_softmax(pred_logits_soft_label, dim=-1)
-            loss = -(y_soft_label * log_probs_soft_label).sum() / (x_batch.shape[0] * x_batch.shape[1])
-            loss.backward()
-            optimizer_soft_label.step()
-            total_loss_soft_label += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
-            loss_soft_label_list_iter.append(loss.item())
-            loss = 0
+                # Forward pass for soft label model
+                optimizer_soft_label.zero_grad()
+                outputs_soft_label = model_soft_label(x_batch)
+                pred_logits_soft_label = outputs_soft_label.logits
+                log_probs_soft_label = F.log_softmax(pred_logits_soft_label, dim=-1)
+                loss = -(y_soft_label * log_probs_soft_label).sum() / (x_batch.shape[0] * x_batch.shape[1])
+                loss.backward()
+                optimizer_soft_label.step()
+                total_loss_soft_label += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
+                loss_soft_label_list_iter.append(loss.item())
+                loss = 0
+                
+                del log_probs_soft_label
+                del log_probs_one_hot
+            
+            
+            elif args.loss_fn == "MSE":
+
+                # Forward pass for one hot model
+                optimizer_one_hot.zero_grad()
+                outputs_one_hot = model_one_hot(x_batch)
+                pred_logits_one_hot = outputs_one_hot.logits
+                loss = F.mse_loss(pred_logits_one_hot, y_one_hot)
+                loss.backward()
+                optimizer_one_hot.step()
+                total_loss_one_hot += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
+                loss_one_hot_list_iter.append(loss.item())
+                loss = 0
+
+                # Forward pass for soft label model
+                optimizer_soft_label.zero_grad()
+                outputs_soft_label = model_soft_label(x_batch)
+                pred_logits_soft_label = outputs_soft_label.logits
+                loss = F.mse_loss(pred_logits_soft_label, y_soft_label)
+                loss.backward()
+                optimizer_soft_label.step()
+                total_loss_soft_label += loss.item() * (x_batch.shape[0] * x_batch.shape[1])
+                loss_soft_label_list_iter.append(loss.item())
+                loss = 0
 
 
             del pred_logits_soft_label
             del pred_logits_one_hot
-            del log_probs_soft_label
-            del log_probs_one_hot
+            
 
             batch_idx += 1
             num_datapoints += x_batch.shape[0]
