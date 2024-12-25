@@ -37,7 +37,7 @@ import mmap
 import hashlib
 
 # import trie_module_memap
-import trie_module_protV1_lib_multithreaded
+# import trie_module_protV1_lib_multithreaded
 # import trie_module_protV1_lib
 
 import numpy as np
@@ -66,7 +66,7 @@ import math
 
 
 
-from Wiki_loader_memap_sharded import *
+from OpenWebText_loader_memap_sharded import *
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
 
@@ -429,79 +429,50 @@ if __name__ == "__main__":
     # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
     #     file.write("Got in ? \n")
 
-    print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
-    
-
-    # Example usage
-    dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiTextBig'  # Your saved dataset folder
-    vocab_size = args.vocab_size
-    context_length = args.context_length
-    batch_size = args.batch_size
-    perc_stories = args.perc_stories
-
-
-    # Example usage
-    vocab_size = args.vocab_size
-    context_length = args.context_length
-    # batch_size = 5000
+    dataset_dir = '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin'  # Your saved dataset folder
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
     # Example usage with stride
     print("_" * 100)
-    print("Training tokenizer and tokenizing data ... ")
-    tokenized_data, tokenizer = load_and_tokenize_wikitext(
-        dataset_dir=dataset_dir,
-        vocab_size=args.vocab_size,
-        context_length=args.context_length,
-        tokenizer_path="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Data/Wiki_tokenizer/",
-        tokenized_data_path="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Data/Wiki_tokenized_dataset/"
-    )
-    print("Complete!")
-    print("_" * 100)
-
-    print("_" * 100)
     print("Creating dataloader ... ")
-    dataloader = create_dataloader(
-        tokenized_data=tokenized_data,
+    train_loader, vocab_size = create_dataloader(
+        '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin',
         context_length=args.context_length,
         batch_size=args.batch_size,
-        stride=args.stride,
+        data_percentage=args.perc_stories,
+        stride=args.stride,   
         is_root = False, 
         root_ctx_len = 2
     )
     print("Complete!")
     print("_" * 100)
+    
+    # data = np.memmap(dataset_dir, dtype=np.uint16, mode='r')[:1_000_000]
+    # args.vocab_size  = int(np.max(data)) + 1
+    args.vocab_size = vocab_size
+    print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
+    
+
+    # Example usage
+    vocab_size = args.vocab_size
+    context_length = args.context_length
+    batch_size = args.batch_size
+    perc_stories = args.perc_stories
+    
 
 
-    num_ctx = len(dataloader)
+    num_ctx = len(train_loader)
     
     first_token_bins = {token_num:0 for token_num in range(0, args.vocab_size)}
 
     # firstTwo_token_bins = get_context_pair_frequencies(dataloader, max_batches=1000)
 
-    firstTwo_token_bins = analyze_dataloader_windows_startPairs(dataloader)
+    firstTwo_token_bins = train_loader.dataset.analyze_window_startPairs(prefix_length=2)
+    
     
 
-    # firstTwo_token_bins = {}
-
-
-    # print("Processing the first token distributions ...")
-    # # Training loop for the first model on dataset1
-    # for batch in tqdm(dataloader):  
-        
-    #     # Extract `x` (input) and `y` (target) from the full sequence
-    #     x_batch_firstToken = batch[:, 0]  # Everything except the last token
-    #     first_token_bins = update_first_count_dict(x_batch_firstToken, first_token_bins)
-
-
-    #     x_batch_firstTwoTokens = batch[:, 0:2] 
-    #     x_batch_firstTwoTokens = [tuple(row) for row in x_batch_firstTwoTokens.tolist()]
-    #     firstTwo_token_bins = update_firstTwo_count_dict(x_batch_firstTwoTokens, firstTwo_token_bins)
-
-    
-
-    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Graphs/firstTokenDistributions/"
-    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%Wiki_Stride{args.stride}"
+    save_graph_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Graphs/firstTokenDistributions/"
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%OpWT_Stride{args.stride}"
     # graph_tokenFirstDist_filename = f"{save_graph_folder}{filename}_firstToken.jpg"
     # plot_frequency_distribution(first_token_bins, graph_tokenFirstDist_filename)
 
@@ -515,7 +486,7 @@ if __name__ == "__main__":
     # print("Bin assignments:", bins)
 
 
-    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
     if not os.path.exists(folder_Tries_path):

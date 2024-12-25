@@ -204,7 +204,7 @@ private:
     MemMapArray<int> ctxCount_array;
     MemMapArray<int> supSize_array;
                                        
-    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 1500000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
     std::vector<double> logcalc_memory_entropy;
 

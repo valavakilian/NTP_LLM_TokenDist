@@ -68,7 +68,7 @@ from torch.optim import SGD
 
 
 
-from Wiki_loader_memap_sharded import *
+from OpenWebText_loader_memap_sharded import *
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
 
@@ -387,9 +387,9 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 print("_" * 100)
 
 
-                plot_data_log_subplots(data_log_MT, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_calc_times(data_log_MT, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_entropy_perCtxLen(data_log_MT, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%Wiki.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len = [t for t in range(0, args.root_ctx_len)])
+                plot_data_log_subplots(data_log_MT, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%OpWT.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+                plot_calc_times(data_log_MT, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%OpWT.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
+                plot_entropy_perCtxLen(data_log_MT, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%OpWT.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len = [t for t in range(0, args.root_ctx_len)])
 
                 with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
                     pickle.dump(data_log_MT, pickle_file)
@@ -453,26 +453,44 @@ if __name__ == "__main__":
     # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
     #     file.write("Got in ? \n")
 
+    et_dir = '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin'  # Your saved dataset folder
+
+    # Step 4: Load and Tokenize the Wikitext-2 Dataset
+    # Example usage with stride
+    print("_" * 100)
+    print("Creating dataloader ... ")
+    dataloader, vocab_size = create_dataloader(
+        '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin',
+        context_length=args.context_length,
+        batch_size=args.batch_size,
+        data_percentage=args.perc_stories,
+        stride=args.stride,   
+        is_root = True, 
+        root_ctx_len = 2
+    )
+    print("Complete!")
+    print("_" * 100)
+    args.vocab_size = vocab_size
+
     print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
     
-    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%Wiki_Stride{args.stride}"
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%OpWT_Stride{args.stride}"
 
 
     # Make the folders for the root and where the tries are saved
-    # save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
+    # save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Tries/"
     save_Trie_folder = "./Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
     
 
     # Example usage
-    dataset_dir = '/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist/WikiTextBig'  # Your saved dataset folder
     vocab_size = args.vocab_size
     context_length = args.context_length
     batch_size = args.batch_size
     perc_stories = args.perc_stories
 
-    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/"
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
 
@@ -484,35 +502,7 @@ if __name__ == "__main__":
     bin_folder_path = folder_Tries_path + f"group_root/"
     # bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
 
-
-    # Step 4: Load and Tokenize the Wikitext-2 Dataset
-    # Example usage with stride
-    print("_" * 100)
-    print("Training tokenizer and tokenizing data ... ")
-    tokenized_data, tokenizer = load_and_tokenize_wikitext(
-        dataset_dir=dataset_dir,
-        vocab_size=args.vocab_size,
-        context_length=args.context_length,
-        tokenizer_path="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Data/Wiki_tokenizer/",
-        tokenized_data_path="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Data/Wiki_tokenized_dataset/"
-    )
-    print("Complete!")
-    print("_" * 100)
-
-    print("_" * 100)
-    print("Creating dataloader ... ")
-    dataloader = create_dataloader(
-        tokenized_data=tokenized_data,
-        context_length=args.context_length,
-        batch_size=args.batch_size,
-        stride=args.stride,
-        is_root = True, 
-        root_ctx_len = 2
-    )
     num_ctx = len(dataloader)
-    print("Complete!")
-    print("_" * 100)
-    print("Dataloader Created")
 
     num_milestones = 100    
     context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)

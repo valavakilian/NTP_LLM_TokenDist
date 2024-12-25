@@ -267,7 +267,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     memap_filename_MT = f"{save_tree_folder}TrieRoot_MT"
     
 
-    Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.root_ctx_len + 1) * 20 // (1024**3)), 6)
+    Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.root_ctx_len + 1) * 20 // (1024**3)), 20)
 
        
     exp_was_initiated = False
