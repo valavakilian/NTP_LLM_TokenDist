@@ -357,20 +357,20 @@ public:
         std::cout << "=== Starting serialization ===" << std::endl;
         std::cout << "Total nodes to write: " << nodes.size() << std::endl;
 
-        // When writing nodes & children
-        for (size_t i = 0; i < total_nodes; i++) {
-            auto& ram_node = nodes[i];
-            std::cout << "\nWriting node " << i << ":" << std::endl;
-            std::cout << "- children count: " << ram_node.num_children << std::endl;
-            if (ram_node.num_children > 0) {
-                std::cout << "- children values: ";
-                for (int j = 0; j < ram_node.num_children; j++) {
-                    std::cout << "(" << ram_node.children[j].first 
-                            << "," << ram_node.children[j].second << ") ";
-                }
-                std::cout << std::endl;
-            }
-        }
+        // // When writing nodes & children
+        // for (size_t i = 0; i < total_nodes; i++) {
+        //     auto& ram_node = nodes[i];
+        //     std::cout << "\nWriting node " << i << ":" << std::endl;
+        //     std::cout << "- children count: " << ram_node.num_children << std::endl;
+        //     if (ram_node.num_children > 0) {
+        //         std::cout << "- children values: ";
+        //         for (int j = 0; j < ram_node.num_children; j++) {
+        //             std::cout << "(" << ram_node.children[j].first 
+        //                     << "," << ram_node.children[j].second << ") ";
+        //         }
+        //         std::cout << std::endl;
+        //     }
+        // }
 
         // First block: all nodes
         size_t current_offset = 0;
@@ -390,11 +390,11 @@ public:
             }
         }
 
-        std::cout << "Debug offsets:\n";
-        for (size_t i = 0; i < std::min(total_nodes, size_t(5)); i++) {
-            std::cout << "Node " << i << ": address=" << node_addresses[i] 
-                    << ", children_address=" << children_addresses[i] << std::endl;
-        }
+        // std::cout << "Debug offsets:\n";
+        // for (size_t i = 0; i < std::min(total_nodes, size_t(5)); i++) {
+        //     std::cout << "Node " << i << ": address=" << node_addresses[i] 
+        //             << ", children_address=" << children_addresses[i] << std::endl;
+        // }
 
         size_t total_size = current_offset;
         std::cout << "total_size: " << total_size << std::endl;

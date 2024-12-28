@@ -601,29 +601,29 @@ if __name__ == "__main__":
         print("num_ctx: " + str(num_ctx))
         context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = False)
 
-        context_tries[group] = context_tries
-        print("Tree loading/contruction complete")
-        print("_" * 100)
-
         save_trie_time = time.time()
         context_tree.serialize_to_mmap()
         save_trie_time = save_trie_time - time.time()
         print(f"Took {save_trie_time} time to save trie." )
 
+        context_tries[group] = context_tree
+        print("Tree loading/contruction complete")
+        print("_" * 100)
 
-        print("Input contexts are ...")
-        for X in tqdm(dataloader):
-            for i in range(X.shape[0]):
-                print("-> " + str(X[i,:]))
 
-        print("their ntp is distribution is")
-        for X in tqdm(dataloader):
-            soft_label = context_tree.retrieve_softlabel(X)
-            for i in range(X.shape[0]):
-                print(X[i,:])                
-                print(soft_label[i])
-                print("____________________________")
-                input()
+        # print("Input contexts are ...")
+        # for X in tqdm(dataloader):
+        #     for i in range(X.shape[0]):
+        #         print("-> " + str(X[i,:]))
+
+        # print("their ntp is distribution is")
+        # for X in tqdm(dataloader):
+        #     soft_label = context_tree.retrieve_softlabel(X)
+        #     for i in range(X.shape[0]):
+        #         print(X[i,:])                
+        #         print(soft_label[i])
+        #         print("____________________________")
+        #         input()
 
     
     print("_" * 100)
@@ -637,193 +637,69 @@ if __name__ == "__main__":
     # args.group = group
     num_milestones = 2
     print("num_ctx: " + str(num_ctx))
-    context_tree = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = True)
+    context_tree_root = load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_ctx, is_root = True)
 
-    print("Tree loading/contruction complete")
-    result = context_tree.calculate_and_get_entropy_faster_root()
-    dataset_entropy = result.entropy
-    total_count = result.total_count
-    print("Entropy Calculated Trie: " + str(dataset_entropy))
-    print("Count Calculated Trie: " + str(total_count))
-    print("_" * 100)
-
-    entropy_branches_Trie[f"Root"]={"entropy": dataset_entropy, "count": total_count}
-    
-    
-    entropy, total_num = cal_entropy_on_python_dict(dataloader, args.root_ctx_len, is_root = True)
-    print("Entropy Calculated Dict: " + str(entropy))
-    print("Count Calculated Dict: " + str(total_num))
-    entropy_branches_Dict[f"Group_{group}"]={"entropy": entropy, "count": total_num}
-    print("_" * 100)
-    # input()
+    save_trie_time = time.time()
+    context_tree_root.serialize_to_mmap()
+    save_trie_time = save_trie_time - time.time()
+    print(f"Took {save_trie_time} time to save trie." )
 
 
-    full_entropy = 0
-    full_count = 0
-    for group, info in entropy_branches_Trie.items():
-        full_entropy += info["entropy"] * info["count"]
-        full_count += info["count"]
-    full_entropy = full_entropy / full_count
+    # dataloader, num_ctx = create_integer_dataloader(custom_data, context_length, batch_size, stride)
 
-    print(info)
-    print("Full Entropy from multiProcessed Trie:" + str(full_entropy))
-    print("Full Count from multiProcessed Trie:" + str(full_count))
+    for group in range(0,4):
+        dataloader, num_ctx = create_shard_integer_dataloader(custom_data, context_length, batch_size, stride, bins[group], args.root_ctx_len, is_root = False)
+        for batch in dataloader:
+            root_dist = context_tree_root.retrieve_softlabel(batch)
+            branch_dist = context_tries[group].retrieve_softlabel(batch)
+            print(root_dist)
+            print(branch_dist)
+            for i in range(0, batch.shape[0]):
+                X = batch[i,:]
+                
+                full_X_distro = []
+                print("X: " + str(X))
+                for d in root_dist[i][0:2]:
+                    full_X_distro.append(d)
+                
+                for d in branch_dist[i][2:]:
+                    full_X_distro.append(d)
+
+                print("full_X_distro: " + str(full_X_distro))
+                input()
 
 
 
-    dataloader, num_ctx = create_integer_dataloader(custom_data, context_length, batch_size, stride)
-    dict_counts = {}
-    for batch in dataloader:
-        for x in batch:
-            for i in range(1,context_length+1):
-                string = '-'.join(x[0:i].numpy().astype(str).tolist())
-                if string in dict_counts.keys():
-                    dict_counts[string][str(int(x[i].item()))] += 1
-                else:
-                    dict_counts[string] = {str(i):0 for i in range(0,vocab_size)}
-                    dict_counts[string][str(int(x[i].item()))] += 1
+    # dict_counts = {}
+    # for batch in dataloader:
+    #     for x in batch:
+    #         for i in range(1,context_length+1):
+    #             string = '-'.join(x[0:i].numpy().astype(str).tolist())
+    #             if string in dict_counts.keys():
+    #                 dict_counts[string][str(int(x[i].item()))] += 1
+    #             else:
+    #                 dict_counts[string] = {str(i):0 for i in range(0,vocab_size)}
+    #                 dict_counts[string][str(int(x[i].item()))] += 1
 
-    entropy = 0
-    total_num = 0
-    entropy_dict = {}
-    for index, (ctx, ctx_ctp) in enumerate(dict_counts.items()):
-        entropy_ctx = 0
-        count_ctx = sum(list(ctx_ctp.values()))
-        for _, (ntp, count) in enumerate(ctx_ctp.items()):
-            if count != 0:
-                entropy_ctx -= count / count_ctx * np.log(count / count_ctx)
-        entropy += count_ctx * entropy_ctx
-        total_num += count_ctx
+    # entropy = 0
+    # total_num = 0
+    # entropy_dict = {}
+    # for index, (ctx, ctx_ctp) in enumerate(dict_counts.items()):
+    #     entropy_ctx = 0
+    #     count_ctx = sum(list(ctx_ctp.values()))
+    #     for _, (ntp, count) in enumerate(ctx_ctp.items()):
+    #         if count != 0:
+    #             entropy_ctx -= count / count_ctx * np.log(count / count_ctx)
+    #     entropy += count_ctx * entropy_ctx
+    #     total_num += count_ctx
         
-        entropy_dict[ctx] = entropy_ctx
+    #     entropy_dict[ctx] = entropy_ctx
     
-    entropy /= total_num
-    entropy_dict = {key:value / total_num for key,value in entropy_dict.items()}
+    # entropy /= total_num
+    # entropy_dict = {key:value / total_num for key,value in entropy_dict.items()}
     
-    # print("dict_counts:")
-    # print(dict_counts)
-    print("entropy String dataset: " + str(entropy))
-    print("num of contexts String dataset: " + str(len(list(dict_counts.keys()))))
-    # print("entropy_dict: " + str(entropy_dict))
-    # print("num unique contexts: " + str(len(dict_counts.keys())))
+    # # print("dict_counts:")
+    # # print(dict_counts)
+    # print("entropy String dataset: " + str(entropy))
+    # print("num of contexts String dataset: " + str(len(list(dict_counts.keys()))))
     
-    # input()
-
-
-
-    
-    # print("Analyzing Data ... ")
-    # # Manual training loop
-    # num_datapoints = 0
-
-    
-    # count_num_one_hots = 0
-    
-    # norm_soft_vs_hard_diff = 0
-    # num_total_samples = 0
-
-    # print("_" * 100)
-    # print("Checking that the Trie is correct")
-    # is_correct = True
-    # # Training loop for the first model on dataset1
-    # for batch in tqdm(dataloader):
-
-    #     y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
-    #     y_soft_label = get_soft_label(context_tree, args, batch).float()
-
-    #     x_batch = batch[:, :-1]  # Everything except the last token
-    #     norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
-    #     norm_soft_vs_hard_diff += norms.sum()
-    #     num_total_samples += batch.shape[0] * batch.shape[1]
-
-    #     for i in range(0, batch.shape[0]):
-    #         for context_index in range(1,batch.shape[1]):
-    #             string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
-                
-    #             prob_vector_trie = y_soft_label[i,context_index-1]
-    #             # Step 1: Extract values as a tensor
-    #             counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
-    #             # Step 2: Normalize to create a probability vector
-    #             prob_vector = counts / counts.sum()
-
-    #             # print(y_soft_label[i,context_index-1])
-    #             # print(prob_vector)
-    #             if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
-    #                 print("Following context are incorrrectly calculated with the Trie.")
-    #                 print("Context: " + str(string))
-    #                 print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
-    #                 print("soft_label python: " + str(prob_vector))
-    #                 print("_______________________________________________________________________")
-    #                 is_correct = False
-    
-    # if not is_correct:
-    #     print("_" * 100)
-    #     print("Trie is contructed incorrectly")
-    #     print("_" * 100)
-
-    # print("precentage of one hots: " + str(round(count_num_one_hots / num_total_samples * 100, 3)))
-
-
-    # print("_" * 100)
-    # print("Deleting tree and reloading it ...")
-    # del context_tree
-    # print("Deleted")
-    # print("_" * 100)
-
-    # memap_filename = f"debug_trie"
-    # save_tree_folder =  "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/context_trees_memap_cpp/"
-    # memap_filename = f"{save_tree_folder}{memap_filename}"
-    # # input(memap_filename)
-    # context_tree = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename)
-    # print("Reloaded")
-    # print("_" * 100)
-
-
-    # is_correct = True
-    # print("_" * 100)
-    # print("Checking that the loaded Trie is correct")
-    # # Training loop for the first model on dataset1
-    # for batch in tqdm(dataloader):
-
-    #     y_one_hot = F.one_hot(batch[:, 1:], num_classes=args.vocab_size).float()  # Assuming vocab_size is defined
-    #     y_soft_label = get_soft_label(context_tree, args, batch).float()
-
-    #     x_batch = batch[:, :-1]  # Everything except the last token
-    #     norms = torch.norm(y_one_hot - y_soft_label, p=1, dim=-1)
-    #     norm_soft_vs_hard_diff += norms.sum()
-    #     num_total_samples += batch.shape[0] * batch.shape[1]
-
-    #     for i in range(0, batch.shape[0]):
-    #         for context_index in range(1,batch.shape[1]):
-    #             string = '-'.join(batch[i,0:context_index].numpy().astype(str).tolist())
-                
-    #             prob_vector_trie = y_soft_label[i,context_index-1]
-    #             # Step 1: Extract values as a tensor
-    #             counts = torch.tensor([dict_counts[string].get(str(i), 0) for i in range(vocab_size)], dtype=torch.float32)
-    #             # Step 2: Normalize to create a probability vector
-    #             prob_vector = counts / counts.sum()
-
-    #             # print(y_soft_label[i,context_index-1])
-    #             # print(prob_vector)
-    #             if not torch.allclose(prob_vector_trie, prob_vector, atol=1e-6):
-    #                 print("Following context are incorrrectly calculated with the Trie.")
-    #                 print("Context: " + str(string))
-    #                 print("soft_label tree: " + str(y_soft_label[i,context_index-1]))
-    #                 print("soft_label python: " + str(prob_vector))
-    #                 print("_______________________________________________________________________")
-    #                 input()
-
-    # if not is_correct:
-    #     print("_" * 100)
-    #     print("Trie is reloaded incorrectly")
-    #     print("_" * 100)
-
-    # print("Experiment complete!")
-
-
-
-
-
-# /scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/context_trees_memap_cpp/debug_trie
-
-# /scratch/st-cthrampo-1/vaalaa/NTP_LLM_TrieMultithreaded_TS_debugFiles/TrieFiles/context_trees_memap_cpp/debug_trie
