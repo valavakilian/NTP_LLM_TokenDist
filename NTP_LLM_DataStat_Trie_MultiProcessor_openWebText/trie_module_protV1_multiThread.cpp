@@ -149,57 +149,12 @@ private:
         return node->children;
     }
 
-
-    // For construction phase, allocating a new node just means adding to vector
-    // size_t allocate_node(int64_t parent_level) {
-    //     size_t new_index = nodes.size();
-    //     nodes.push_back(RAMTrieNode{
-    //         0,                    // count
-    //         {},                   // empty children vector
-    //         parent_level + 1      // node_level
-    //     });
-    //     return new_index;
-    // }
     size_t allocate_node(int64_t parent_level) {
         size_t new_index = nodes.size();
         nodes.push_back(createNode(parent_level));
         return new_index;
     }
 
-    // For RAM mode
-    // int64_t find_child(RAMTrieNode* node, int64_t value) {
-    //     auto it = std::lower_bound(node->children.begin(), node->children.end(), value,
-    //         [](const auto& pair, int64_t val) {
-    //             return pair.first < val;
-    //         });
-        
-    //     if (it != node->children.end() && it->first == value) {
-    //         return it->second;  // Return the child_index
-    //     }
-    //     return -1;
-    // }
-
-    // int64_t find_child(const RAMTrieNode& node, int64_t value) {
-    //     auto it = std::lower_bound(node.children.begin(), node.children.end(), value,
-    //         [](const auto& pair, int64_t val) {
-    //             return pair.first < val;
-    //         });
-        
-    //     if (it != node.children.end() && it->first == value) {
-    //         return it->second;
-    //     }
-    //     return -1;
-    // }
-
-    // RAMTrieNode createNode(int64_t level) {
-    //     return RAMTrieNode{
-    //         0,          // count
-    //         0,          // num_children
-    //         nullptr,    // children pointer
-    //         0,          // children_capacity
-    //         level       // node_level
-    //     };
-    // }
     // Fix node creation
     RAMTrieNode createNode(int64_t parent_level) {
         return RAMTrieNode{
@@ -245,38 +200,6 @@ private:
         }
         return -1;
     }
-
-    // When allocating children:
-    // size_t allocate_children(RAMTrieNode* node, size_t needed_size) {
-    //     if (node->children == nullptr) {
-    //         // First allocation
-    //         size_t initial_size = std::max(needed_size, size_t(8));  // Start with at least 8
-    //         node->children = new std::pair<int64_t, int64_t>[initial_size];
-    //         node->children_capacity = initial_size;
-    //     }
-    //     else if (node->num_children + needed_size > node->children_capacity) {
-    //         // Need to grow
-    //         size_t new_capacity = node->children_capacity * 2;
-    //         auto new_children = new std::pair<int64_t, int64_t>[new_capacity];
-    //         memcpy(new_children, node->children, 
-    //             node->num_children * sizeof(std::pair<int64_t, int64_t>));
-    //         delete[] node->children;
-    //         node->children = new_children;
-    //         node->children_capacity = new_capacity;
-    //     }
-    //     return node->num_children;
-    // }
-
-    // void insert_child(RAMTrieNode* node, int64_t value, int64_t child_index) {
-    //     // Find insertion position
-    //     auto it = std::lower_bound(node->children.begin(), node->children.end(), value,
-    //         [](const auto& pair, int64_t val) {
-    //             return pair.first < val;
-    //         });
-        
-    //     // Insert at the correct position - vector handles the memory movement
-    //     node->children.insert(it, {value, child_index});
-    // }
 
     // Add this function to handle children array allocation/reallocation
     size_t allocate_children(RAMTrieNode* node, size_t needed_size) {
@@ -417,201 +340,6 @@ public:
             throw std::runtime_error("Error loading metadata: " + std::string(e.what()));
         }
     }
-
-    // Add a new method to serialize RAM trie to memory-mapped file
-    // void serialize_to_mmap() {
-    //     if (!is_construction_mode) {
-    //         throw std::runtime_error("Not in construction mode");
-    //     }
-
-    //     // Calculate total size needed
-    //     size_t total_size = 0;
-    //     std::vector<size_t> node_offsets(nodes.size());
-    //     std::vector<size_t> children_offsets(nodes.size());
-        
-    //     // First all nodes
-    //     total_size = nodes.size() * sizeof(MMAPTrieNode);
-        
-    //     // Then all child arrays
-    //     for (size_t i = 0; i < nodes.size(); i++) {
-    //         node_offsets[i] = i * sizeof(MMAPTrieNode);
-    //         children_offsets[i] = total_size;
-    //         total_size += nodes[i].children.size() * sizeof(std::pair<int64_t, int64_t>);
-    //     }
-
-    //     // Create and map file
-    //     fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-    //     if (fd == -1) throw std::runtime_error("Failed to create file");
-        
-    //     if (ftruncate(fd, total_size) == -1) {
-    //         close(fd);
-    //         throw std::runtime_error("Failed to set file size");
-    //     }
-        
-    //     mapped_memory = static_cast<char*>(mmap(NULL, total_size, PROT_READ | PROT_WRITE, 
-    //                                         MAP_SHARED, fd, 0));
-        
-    //     // Write nodes and children
-    //     for (size_t i = 0; i < nodes.size(); i++) {
-    //         auto& ram_node = nodes[i];
-    //         MMAPTrieNode mmap_node{
-    //             ram_node.count,
-    //             static_cast<int64_t>(ram_node.children.size()),
-    //             static_cast<int64_t>(children_offsets[i]),
-    //             ram_node.node_level
-    //         };
-            
-    //         memcpy(mapped_memory + node_offsets[i], &mmap_node, sizeof(MMAPTrieNode));
-            
-    //         if (!ram_node.children.empty()) {
-    //             memcpy(mapped_memory + children_offsets[i],
-    //                 ram_node.children.data(),
-    //                 ram_node.children.size() * sizeof(std::pair<int64_t, int64_t>));
-    //         }
-    //     }
-
-    //     // Save metadata
-    //     save_metadata();
-
-    //     // Clear RAM structure and switch modes
-    //     std::vector<RAMTrieNode>().swap(nodes);
-    //     is_construction_mode = false;
-    // }
-
-    // void serialize_to_mmap() {
-    //     if (!is_construction_mode) {
-    //         throw std::runtime_error("Already in mmap mode");
-    //     }
-
-    //     // Calculate total size needed
-    //     size_t total_size = 0;
-    //     std::vector<size_t> node_offsets(nodes.size());
-    //     std::vector<size_t> children_offsets(nodes.size());
-        
-    //     // First all nodes
-    //     total_size = nodes.size() * sizeof(MMAPTrieNode);
-        
-    //     // Then all child arrays
-    //     for (size_t i = 0; i < nodes.size(); i++) {
-    //         node_offsets[i] = i * sizeof(MMAPTrieNode);
-    //         children_offsets[i] = total_size;
-    //         total_size += nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>);
-    //     }
-
-    //     // Create and map file
-    //     // ... (file creation code as before)
-
-    //     // Write all nodes
-    //     for (size_t i = 0; i < nodes.size(); i++) {
-    //         auto& ram_node = nodes[i];
-    //         MMAPTrieNode mmap_node{
-    //             ram_node.count,
-    //             ram_node.num_children,
-    //             static_cast<int64_t>(children_offsets[i]),
-    //             ram_node.node_level
-    //         };
-            
-    //         memcpy(mapped_memory + node_offsets[i], &mmap_node, sizeof(MMAPTrieNode));
-            
-    //         // Write children if any
-    //         if (ram_node.num_children > 0) {
-    //             memcpy(mapped_memory + children_offsets[i],
-    //                 ram_node.children,
-    //                 ram_node.num_children * sizeof(std::pair<int64_t, int64_t>));
-    //         }
-    //     }
-    // }
-
-    // void serialize_to_mmap() {
-    //     std::cout << "----serialize_to_mmap----" << std::endl;
-        
-    //     if (!is_construction_mode) {
-    //         throw std::runtime_error("Already in mmap mode");
-    //     }
-
-    //     // Calculate total size needed
-    //     size_t total_size = 0;
-    //     std::vector<size_t> node_offsets(nodes.size());
-    //     std::vector<size_t> children_offsets(nodes.size());
-        
-    //     // First all nodes
-    //     total_size = nodes.size() * sizeof(MMAPTrieNode);
-        
-    //     // Then all child arrays
-    //     for (size_t i = 0; i < nodes.size(); i++) {
-    //         node_offsets[i] = i * sizeof(MMAPTrieNode);
-    //         children_offsets[i] = total_size;
-    //         if (nodes[i].children != nullptr && nodes[i].num_children > 0) {
-    //             total_size += nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>);
-    //         }
-    //     }
-
-    //     // Create and map file
-    //     fd = open(filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    //     if (fd == -1) {
-    //         throw std::runtime_error("Failed to create file for memory mapping");
-    //     }
-
-    //     // Set the file size
-    //     if (ftruncate(fd, total_size) == -1) {
-    //         close(fd);
-    //         throw std::runtime_error("Failed to set file size");
-    //     }
-
-    //     // Map the file
-    //     mapped_memory = static_cast<char*>(mmap(NULL, total_size, PROT_READ | PROT_WRITE, 
-    //                                         MAP_SHARED, fd, 0));
-    //     if (mapped_memory == MAP_FAILED) {
-    //         close(fd);
-    //         throw std::runtime_error("Failed to map file to memory");
-    //     }
-
-    //     // Write all nodes
-    //     for (size_t i = 0; i < nodes.size(); i++) {
-    //         auto& ram_node = nodes[i];
-
-    //         if (i < 5 || i > nodes.size() - 5) {  // Debug first and last few nodes
-    //             std::cout << "Node " << i << ": count=" << ram_node.count 
-    //                     << ", num_children=" << ram_node.num_children 
-    //                     << ", offset=" << children_offsets[i] << std::endl;
-    //         }
-            
-    //         MMAPTrieNode mmap_node{
-    //             ram_node.count,
-    //             ram_node.num_children,
-    //             static_cast<int64_t>(children_offsets[i]),
-    //             ram_node.node_level
-    //         };
-            
-    //         memcpy(mapped_memory + node_offsets[i], &mmap_node, sizeof(MMAPTrieNode));
-            
-    //         // Write children if any
-    //         if (ram_node.children != nullptr && ram_node.num_children > 0) {
-    //             memcpy(mapped_memory + children_offsets[i],
-    //                 ram_node.children,
-    //                 ram_node.num_children * sizeof(std::pair<int64_t, int64_t>));
-    //         }
-    //     }
-
-    //     // Update file size and allocated size
-    //     file_size = total_size;
-    //     allocated_size = total_size;
-
-    //     // Save metadata
-    //     save_metadata();
-
-    //     // Clean up RAM structures
-    //     for (auto& node : nodes) {
-    //         delete[] node.children;
-    //     }
-    //     nodes.clear();
-    //     nodes.shrink_to_fit();
-
-    //     // Switch mode
-    //     is_construction_mode = false;
-
-    //     std::cout << "----serialization_complete----" << std::endl;
-    // }
 
     void serialize_to_mmap() {
         std::cout << "----serialize_to_mmap----" << std::endl;
@@ -795,26 +523,6 @@ public:
         std::cout << "Memory-mapped file size: " << file_size << " Giga bytes" << std::endl;
         std::cout << "Memory-mapped allocated size: " << allocated_size << " Giga bytes" << std::endl;
     }
-
-
-    // ~Trie_module_protV1() {
-    //     if (is_construction_mode) {
-    //         // Clean up RAM structures
-    //         nodes.clear();
-    //         nodes.shrink_to_fit();
-    //     } else {
-    //         // Clean up memory-mapped resources
-    //         if (mapped_memory != MAP_FAILED) {
-    //             munmap(mapped_memory, allocated_size);
-    //         }
-    //         if (fd != -1) {
-    //             // Truncate the file to the actually used size before closing
-    //             ftruncate(fd, file_size);
-    //             close(fd);
-    //         }
-    //     }
-    //     std::cout << "Destroyed the trie." << std::endl;
-    // }
 
     ~Trie_module_protV1() {
         if (is_construction_mode) {
@@ -1046,33 +754,6 @@ public:
         return soft_label_list;
     }
 
-
-    // size_t get_memory_usage() const {
-    //     if (is_construction_mode) {
-    //         // For RAM mode, return total bytes used by nodes vector
-    //         size_t total_bytes = 0;
-    //         for (const auto& node : nodes) {
-    //             // Size of node itself
-    //             total_bytes += sizeof(RAMTrieNode);
-    //             // Size of its children vector
-    //             total_bytes += node.children.capacity() * sizeof(std::pair<int64_t, int64_t>);
-    //         }
-    //         return total_bytes;
-    //     } else {
-    //         // For mmap mode, return file size as before
-    //         return file_size;
-    //     }
-    // }
-
-    // size_t get_allocated_size() const {
-    //     if (is_construction_mode) {
-    //         // For RAM mode, return total reserved capacity
-    //         return nodes.capacity() * sizeof(RAMTrieNode);
-    //     } else {
-    //         // For mmap mode, return allocated size as before
-    //         return allocated_size;
-    //     }
-    // }
 
     size_t get_memory_usage() const {
         if (is_construction_mode) {
