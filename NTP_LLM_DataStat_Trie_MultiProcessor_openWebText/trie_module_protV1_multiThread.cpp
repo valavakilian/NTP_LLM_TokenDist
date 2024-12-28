@@ -45,111 +45,63 @@ namespace std {
 
 
 
-template<typename T>
-class MemMapArray {
-public:
-    MemMapArray(const std::string& filename, size_t size) : filename(filename), size(size) {
-        // Open file for reading and writing, create if doesn't exist
-        fd = open(filename.c_str(), O_RDWR | O_CREAT, 0666);
-        if (fd == -1) {
-            throw std::runtime_error("Failed to open file for memory mapping");
-        }
+// struct RAMTrieNode {
+//     int64_t count;
+//     std::vector<std::pair<int64_t, int64_t>> children;
+//     int64_t node_level;
+// };
 
-        // Set the file size to hold 'size' number of elements of type T
-        if (ftruncate(fd, size * sizeof(T)) == -1) {
-            throw std::runtime_error("Failed to set file size");
-        }
-
-        // Memory-map the file
-        mapped_memory = (T*)mmap(nullptr, size * sizeof(T), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (mapped_memory == MAP_FAILED) {
-            close(fd);
-            throw std::runtime_error("Failed to map memory");
-        }
-
-        // Initialize the memory to zero
-        std::memset(mapped_memory, 0, size * sizeof(T));
-
-        // DEBUG_PRINT("Initiated my memaparray. size is " << size << " .");
-    }
-
-
-    // Constructor for loading an existing memory-mapped array
-    MemMapArray(const std::string& filename) : filename(filename), size(0), fd(-1), mapped_memory(nullptr) {
-        // Open the existing file in read-write mode
-        fd = open(filename.c_str(), O_RDWR);
-        if (fd == -1) {
-            throw std::runtime_error("Failed to open existing file for memory mapping");
-        }
-
-        // Get the size of the file
-        struct stat st;
-        if (fstat(fd, &st) == -1) {
-            close(fd);
-            throw std::runtime_error("Failed to get file size");
-        }
-
-        size = st.st_size / sizeof(T);
-
-        // Memory-map the file
-        mapped_memory = (T*)mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (mapped_memory == MAP_FAILED) {
-            close(fd);
-            throw std::runtime_error("Failed to map memory");
-        }
-    }
-
-    ~MemMapArray() {
-        if (mapped_memory != MAP_FAILED) {
-            munmap(mapped_memory, size * sizeof(T));
-        }
-        if (fd != -1) {
-            close(fd);
-        }
-    }
-
-    T& operator[](size_t index) {
-        // DEBUG_PRINT("Operator. size is " << size << " .");
-        // DEBUG_PRINT("Operator. index is " << index << " .");
-        if (index >= size) {
-            throw std::out_of_range("Index out of bounds");
-        }
-        return mapped_memory[index];
-    }
-
-    size_t getSize() const {
-        return size;
-    }
-
-private:
-    std::string filename;
-    size_t size;
-    int fd;
-    T* mapped_memory;
-};
+// // Memory-mapped node for storage/reading
+// struct MMAPTrieNode {
+//     int64_t count;
+//     int64_t num_children;
+//     int64_t children_offset;
+//     int64_t node_level;
+// };
 
 
 
-struct TrieNode {
+struct RAMTrieNode {
     int64_t count;
     int64_t num_children;
-    int64_t children_offset;  // Offset to children in the memory-mapped file
-    bool is_root;  // New field to indicate if this is the root node
+    std::pair<int64_t, int64_t>* children;  // Raw array instead of vector
+    int64_t children_capacity;
     int64_t node_level;
-    int64_t node_index;
-    int64_t node_mutex_index;
+};
+std::vector<RAMTrieNode> nodes;  // Our main container during construction
+
+// Memory mapped structure for final format
+struct MMAPTrieNode {
+    int64_t count;
+    int64_t num_children;
+    int64_t children_offset;
+    int64_t node_level;
+    int64_t value;  // Add this to store the value associated with this node
 };
 
+// For RAM-based nodes
+void printTrieNode(const RAMTrieNode* node) {
+    std::cout << "RAMTrieNode Information:" << std::endl;
+    std::cout << "Count: " << node->count << std::endl;
+    std::cout << "Number of Children: " << node->num_children << std::endl;
+    std::cout << "Children Capacity: " << node->children_capacity << std::endl;
+    std::cout << "Node Level: " << node->node_level << std::endl;
+    if (node->children != nullptr) {
+        std::cout << "First few children: ";
+        for (int i = 0; i < std::min(node->num_children, (int64_t)5); i++) {
+            std::cout << "(" << node->children[i].first << "," << node->children[i].second << ") ";
+        }
+        std::cout << std::endl;
+    }
+}
 
-void printTrieNode(const TrieNode* node) {
-    std::cout << "TrieNode Information:" << std::endl;
+// For memory-mapped nodes
+void printTrieNode(const MMAPTrieNode* node) {
+    std::cout << "MMAPTrieNode Information:" << std::endl;
     std::cout << "Count: " << node->count << std::endl;
     std::cout << "Number of Children: " << node->num_children << std::endl;
     std::cout << "Children Offset: " << node->children_offset << std::endl;
-    std::cout << "Is Root: " << (node->is_root ? "True" : "False") << std::endl;
     std::cout << "Node Level: " << node->node_level << std::endl;
-    std::cout << "Node Index: " << node->node_index << std::endl;
-    std::cout << "Node Mutex Index: " << node->node_mutex_index << std::endl;
 }
 
 
@@ -159,119 +111,119 @@ struct InsertResult {
     double execution_time_ms;
 };
 
-struct EntropyResult {
-    double entropy;
-    int64_t total_count;
-    int64_t number_of_oneHots;
-    py::list entropy_results; // Optional: We can add more return values if needed
-    EntropyResult(double e, int64_t c, int64_t o ): entropy(e), total_count(c), number_of_oneHots(o) {}
-};
-
-
-
-
 class Trie_module_protV1 {
+
 private:
+
+    // std::vector<RAMTrieNode> nodes;  // Our main container during construction
+
+    // File handling - needed for eventual memory mapping
     int fd;
     char* mapped_memory;
     std::atomic<size_t> file_size;
     size_t allocated_size;
     std::string filename;
     std::string metadata_filename;
-    std::string countLog_array_filename;
-    std::string ctxLen_array_filename;
-    std::atomic<int64_t> num_unique_contexts;  // New global parameter for unqie context count
-    std::atomic<int64_t> num_total_contexts;  // New global parameter for total context count
 
+    // Core trie statistics
+    std::atomic<int64_t> num_unique_contexts;
+    std::atomic<int64_t> num_total_contexts;
     int64_t context_length;
-    std::atomic<int64_t> node_counter;
-    std::atomic<int64_t> node_mutex_counter;
-    std::map<int64_t, int> num_unique_contexts_per_level;  // int64_t for the level, int for the count
-    std::map<int64_t, int> num_total_contexts_per_level;
-    std::map<int64_t, int> num_oneHots_per_level;
-
-    std::map<int64_t, double> entropy_per_level;
-    std::map<int64_t, double> count_per_level;
-    std::map<int64_t, double> supSize_array_level;
-    std::map<int64_t, double> uniformity_array_level;
     
-    const size_t array_size = 1000000000; // Size of the array
-    // std::vector<double> countLog_array;
-    // std::vector<int> ctxLen_array;
-    // std::vector<int64_t> ctxCount_array;
-    MemMapArray<double> countLog_array;
-    MemMapArray<int> ctxLen_array;
-    MemMapArray<int> ctxCount_array;
-    MemMapArray<int> supSize_array;
-                                       
-    const size_t size_logcalc_memory = 1000000000;  // 1 billion integers (~4 GB)
-    std::vector<double> logcalc_memory_insert;
-    std::vector<double> logcalc_memory_entropy;
+    // Construction mode flag
+    bool is_construction_mode;
 
-    std::mutex alloc_memory_mutex;
-    std::mutex alloc_node_mutex;
-
-    std::vector<std::mutex> mutex_array_lock;  // Array of mutexes
-
-
-    std::atomic<int> active_nodes{0};
-    std::atomic<int> max_active_nodes{0};  // New variable to track maximum
-
-    const size_t MEMORY_THRESHOLD = 1ULL * 1024 * 1024 * 1024; // 1GB threshold
-
-    bool is_close_to_memory_limit() const {
-        return (allocated_size - file_size) <= MEMORY_THRESHOLD;
-    }
-
-    TrieNode* get_node(size_t offset) {
-        if (offset >= file_size) {
-            throw std::runtime_error("Attempted to access memory outside of mapped region");
+    // During construction phase, this returns a pointer to the RAM node
+    RAMTrieNode* get_node(size_t index) {
+        if (index >= nodes.size()) {
+            throw std::runtime_error("Invalid node index");
         }
-        return reinterpret_cast<TrieNode*>(mapped_memory + offset);
+        return &nodes[index];
     }
 
-    std::pair<int64_t, int64_t>* get_children(TrieNode* node) {
-        if (node->children_offset >= file_size) {
-            throw std::runtime_error("Invalid children offset");
-        }
-        return reinterpret_cast<std::pair<int64_t, int64_t>*>(mapped_memory + node->children_offset);
+    // During construction phase, this returns a pointer to the children vector
+    // std::vector<std::pair<int64_t, int64_t>>& get_children(RAMTrieNode* node) {
+    //     return node->children;
+    // }
+    std::pair<int64_t, int64_t>* get_children(RAMTrieNode* node) {
+        return node->children;
     }
 
 
-    // Modify the allocate_space function to periodically update critical info
-    size_t allocate_space(size_t size) {
-        return file_size.fetch_add(size);
-    }
-
-    
+    // For construction phase, allocating a new node just means adding to vector
+    // size_t allocate_node(int64_t parent_level) {
+    //     size_t new_index = nodes.size();
+    //     nodes.push_back(RAMTrieNode{
+    //         0,                    // count
+    //         {},                   // empty children vector
+    //         parent_level + 1      // node_level
+    //     });
+    //     return new_index;
+    // }
     size_t allocate_node(int64_t parent_level) {
-        size_t offset = allocate_space(sizeof(TrieNode));
-        TrieNode* new_node = get_node(offset);
-        new_node->node_level = parent_level + 1; 
+        size_t new_index = nodes.size();
+        nodes.push_back(createNode(parent_level));
+        return new_index;
+    }
+
+    // For RAM mode
+    // int64_t find_child(RAMTrieNode* node, int64_t value) {
+    //     auto it = std::lower_bound(node->children.begin(), node->children.end(), value,
+    //         [](const auto& pair, int64_t val) {
+    //             return pair.first < val;
+    //         });
         
-        if (new_node->node_level <= context_length){
-            new_node->node_index = node_counter.fetch_add(1) + 1;
-            new_node->node_mutex_index = node_mutex_counter.fetch_add(1) + 1;
-            ctxLen_array[new_node->node_index] = new_node->node_level;
-        } else {
-            new_node->node_mutex_index = node_mutex_counter.fetch_add(1) + 1;
-            new_node->node_index = -1;
+    //     if (it != node->children.end() && it->first == value) {
+    //         return it->second;  // Return the child_index
+    //     }
+    //     return -1;
+    // }
+
+    // int64_t find_child(const RAMTrieNode& node, int64_t value) {
+    //     auto it = std::lower_bound(node.children.begin(), node.children.end(), value,
+    //         [](const auto& pair, int64_t val) {
+    //             return pair.first < val;
+    //         });
+        
+    //     if (it != node.children.end() && it->first == value) {
+    //         return it->second;
+    //     }
+    //     return -1;
+    // }
+
+    // RAMTrieNode createNode(int64_t level) {
+    //     return RAMTrieNode{
+    //         0,          // count
+    //         0,          // num_children
+    //         nullptr,    // children pointer
+    //         0,          // children_capacity
+    //         level       // node_level
+    //     };
+    // }
+    // Fix node creation
+    RAMTrieNode createNode(int64_t parent_level) {
+        return RAMTrieNode{
+            0,          // count
+            0,          // num_children
+            nullptr,    // children pointer (initialize as null)
+            0,          // children_capacity
+            parent_level + 1  // node_level
+        };
+    }
+
+    int64_t find_child(RAMTrieNode* node, int64_t value) {
+        if (node->children == nullptr || node->num_children == 0) {
+            return -1;
         }
-        return offset;
-    }
 
-    size_t allocate_children(int64_t num_children) {
-        return allocate_space(num_children * sizeof(std::pair<int64_t, int64_t>));
-    }
-
-    int64_t find_child(std::pair<int64_t, int64_t>* children, int64_t num_children, int64_t value) {
-        int64_t left = 0, right = num_children - 1;
+        // Binary search
+        int64_t left = 0, right = node->num_children - 1;
         while (left <= right) {
             int64_t mid = left + (right - left) / 2;
-            if (children[mid].first == value) {
-                return mid;
+            if (node->children[mid].first == value) {
+                return node->children[mid].second;  // Return index of child node
             }
-            if (children[mid].first < value) {
+            if (node->children[mid].first < value) {
                 left = mid + 1;
             } else {
                 right = mid - 1;
@@ -280,124 +232,150 @@ private:
         return -1;
     }
 
-    void insert_child(TrieNode* node, int64_t value, int64_t child_offset) {
-        std::pair<int64_t, int64_t>* children = get_children(node);
+    // For memory-mapped mode - keep original array version
+    int64_t find_child(std::pair<int64_t, int64_t>* children, int64_t num_children, int64_t value) {
+        // std::cout << "find_child searching for value " << value 
+        //         << " among " << num_children << " children" << std::endl;
+        
+        for (int64_t i = 0; i < num_children; i++) {
+            // std::cout << "Comparing with child " << i << ": " << children[i].first << std::endl;
+            if (children[i].first == value) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // When allocating children:
+    // size_t allocate_children(RAMTrieNode* node, size_t needed_size) {
+    //     if (node->children == nullptr) {
+    //         // First allocation
+    //         size_t initial_size = std::max(needed_size, size_t(8));  // Start with at least 8
+    //         node->children = new std::pair<int64_t, int64_t>[initial_size];
+    //         node->children_capacity = initial_size;
+    //     }
+    //     else if (node->num_children + needed_size > node->children_capacity) {
+    //         // Need to grow
+    //         size_t new_capacity = node->children_capacity * 2;
+    //         auto new_children = new std::pair<int64_t, int64_t>[new_capacity];
+    //         memcpy(new_children, node->children, 
+    //             node->num_children * sizeof(std::pair<int64_t, int64_t>));
+    //         delete[] node->children;
+    //         node->children = new_children;
+    //         node->children_capacity = new_capacity;
+    //     }
+    //     return node->num_children;
+    // }
+
+    // void insert_child(RAMTrieNode* node, int64_t value, int64_t child_index) {
+    //     // Find insertion position
+    //     auto it = std::lower_bound(node->children.begin(), node->children.end(), value,
+    //         [](const auto& pair, int64_t val) {
+    //             return pair.first < val;
+    //         });
+        
+    //     // Insert at the correct position - vector handles the memory movement
+    //     node->children.insert(it, {value, child_index});
+    // }
+
+    // Add this function to handle children array allocation/reallocation
+    size_t allocate_children(RAMTrieNode* node, size_t needed_size) {
+        if (node->children == nullptr) {
+            // First allocation
+            size_t initial_size = std::max(needed_size, size_t(8));  // Start with at least 8
+            node->children = new std::pair<int64_t, int64_t>[initial_size];
+            node->children_capacity = initial_size;
+        }
+        else if (node->num_children + needed_size > node->children_capacity) {
+            // Need to grow
+            size_t new_capacity = node->children_capacity * 2;
+            auto new_children = new std::pair<int64_t, int64_t>[new_capacity];
+            // Use copy instead of memmove for proper object copying
+            for (int64_t i = 0; i < node->num_children; i++) {
+                new_children[i] = node->children[i];
+            }
+            delete[] node->children;
+            node->children = new_children;
+            node->children_capacity = new_capacity;
+        }
+        return node->children_capacity;
+    }
+
+    // And modify insert_child to use proper copying
+    void insert_child(RAMTrieNode* node, int64_t value, int64_t child_index) {
+        // Ensure we have space
+        if (node->children == nullptr || node->num_children >= node->children_capacity) {
+            allocate_children(node, 1);
+        }
+
+        // Find insertion position
         int64_t insert_pos = 0;
-        while (insert_pos < node->num_children && children[insert_pos].first < value) {
+        while (insert_pos < node->num_children && node->children[insert_pos].first < value) {
             insert_pos++;
         }
 
-        if (insert_pos < node->num_children) {
-            memmove(&children[insert_pos + 1], &children[insert_pos], 
-                    (node->num_children - insert_pos) * sizeof(std::pair<int64_t, int64_t>));
+        // Shift existing elements using proper copying
+        for (int64_t i = node->num_children; i > insert_pos; i--) {
+            node->children[i] = node->children[i-1];
         }
 
-        children[insert_pos] = {value, child_offset};
+        // Insert new child
+        node->children[insert_pos] = std::make_pair(value, child_index);
         node->num_children++;
     }
 
-    void collect_sequences(size_t node_offset, std::vector<int64_t>& current_sequence, 
-                           std::unordered_map<std::vector<int64_t>, int64_t>& sequences) {
-        TrieNode* node = get_node(node_offset);
-        
-        if (node->num_children == 0) {
-            return ; 
+
+    // Memory-mapped version of get_node
+    MMAPTrieNode* get_mmap_node(size_t offset) {
+        if (offset >= file_size) {
+            throw std::runtime_error("Attempted to access memory outside of mapped region");
         }
-        
-        if (node->count > 0) {
-            sequences[current_sequence] = node->count;
-        }
-        
-        std::pair<int64_t, int64_t>* children = get_children(node);
-        for (int64_t i = 0; i < node->num_children; ++i) {
-            current_sequence.push_back(children[i].first);
-            collect_sequences(children[i].second, current_sequence, sequences);
-            current_sequence.pop_back();
-        }
+        return reinterpret_cast<MMAPTrieNode*>(mapped_memory + offset);
     }
 
-    size_t find_node(const std::vector<int64_t>& sequence) {
-        size_t current_offset = 0;  // Start from the root
-        TrieNode* current = get_node(current_offset);
-
-        for (int64_t value : sequence) {
-            bool found = false;
-            std::pair<int64_t, int64_t>* children = get_children(current);
-            for (int64_t i = 0; i < current->num_children; ++i) {
-                if (children[i].first == value) {
-                    current_offset = children[i].second;
-                    current = get_node(current_offset);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                return -1;  // Sequence not found in trie
-            }
+    // Memory-mapped version of get_children
+    std::pair<int64_t, int64_t>* get_mmap_children(MMAPTrieNode* node) {
+        if (node->children_offset >= file_size) {
+            std::cout << "ERROR in get_mmap_children: offset " << node->children_offset 
+                    << " exceeds file_size " << file_size << std::endl;
+            throw std::runtime_error("Invalid children offset");
         }
-        return current_offset;
+        return reinterpret_cast<std::pair<int64_t, int64_t>*>(mapped_memory + node->children_offset);
     }
 
 
 public:
+    // Constructor for building new trie in RAM
     Trie_module_protV1(const std::string& fname, size_t initial_size_gb, int64_t context_length) 
-    : filename(fname + ".bin"), context_length(context_length), countLog_array(fname + "_countLog_arr.dat", array_size), 
-    ctxLen_array(fname + "_ctxLen_arr.dat", array_size), ctxCount_array(fname + "_ctxCount_arr.dat", array_size), supSize_array(fname + "_supSize_arr.dat", array_size)
-    , logcalc_memory_insert(size_logcalc_memory, -1), logcalc_memory_entropy(size_logcalc_memory, -1), mutex_array_lock(array_size) {
-        allocated_size = initial_size_gb * 1024ULL * 1024ULL * 1024ULL; // Convert GB to bytes
-        fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-        if (fd == -1) {
-            throw std::runtime_error("Failed to open file for memory mapping");
-        }
-
-        // Set the file size to the allocated size
-        if (ftruncate(fd, allocated_size) == -1) {
-            close(fd);
-            throw std::runtime_error("Failed to set initial file size");
-        }
-
-        mapped_memory = static_cast<char*>(mmap(NULL, allocated_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
-        if (mapped_memory == MAP_FAILED) {
-            close(fd);
-            throw std::runtime_error("Failed to map file to memory");
-        }
-
+        : filename(fname + ".bin"), 
+        context_length(context_length),
+        is_construction_mode(true) {
+        
         metadata_filename = filename + "_metadata.bin";
 
+        // Reserve space based on expected number of nodes
+        size_t expected_nodes = initial_size_gb * 1024 * 1024 * 1024 / sizeof(RAMTrieNode);
+        nodes.reserve(expected_nodes);  // Pre-allocate space
+        
+        // Start with root node
+        nodes.push_back(RAMTrieNode{
+            0,      // count
+            {},     // empty children vector
+            0       // level
+        });
 
-        // Initialize the root node
-        file_size = sizeof(TrieNode);
-        TrieNode* root = get_node(0);
-        root->count = 0;
-        root->num_children = 0;
-        root->children_offset = 0;
-        root->is_root = true;  // Set the root node indicator
-        root->node_index = 0;
-        root->node_mutex_index = 0;
-
-        num_unique_contexts = 0;  // Count the root node
+        num_unique_contexts = 0;
         num_total_contexts = 0;
-        node_counter = 0;
-        node_mutex_counter = 0;
-
 
         int num_procs = omp_get_num_procs();
         DEBUG_PRINT("Number of processors available: " << num_procs);
-
-        DEBUG_PRINT("Trie initialized with allocated size: " << allocated_size << " bytes");
+        DEBUG_PRINT("Trie initialized in RAM construction mode");
     }
 
-    // Constructor to load an existing Trie from a file
-    // Constructor to load an existing Trie from a file
-    Trie_module_protV1(const std::string& fname) : 
-        filename(fname + ".bin"), 
-        countLog_array(fname + "_countLog_arr.dat"), 
-        ctxLen_array(fname + "_ctxLen_arr.dat"), 
-        ctxCount_array(fname + "_ctxCount_arr.dat"),
-        supSize_array(fname + "_supSize_arr.dat", array_size),
-        logcalc_memory_insert(size_logcalc_memory, -1), 
-        logcalc_memory_entropy(size_logcalc_memory, -1), 
-        mutex_array_lock(array_size) {
+    // Constructor for loading existing memory-mapped trie
+    Trie_module_protV1(const std::string& fname) 
+        : filename(fname + ".bin"),
+        is_construction_mode(false) {
         
         // Step 1: Open the file
         fd = open(filename.c_str(), O_RDWR);
@@ -423,60 +401,14 @@ public:
         }
 
         metadata_filename = filename + "_metadata.bin";
-
-        // Step 4: Load metadata and initialize all required arrays
+        
+        // Step 4: Load metadata
         try {
             load_metadata(metadata_filename);
-            
-            // Initialize arrays with loaded data
-            num_unique_contexts_per_level.clear();
-            num_total_contexts_per_level.clear();
-            num_oneHots_per_level.clear();
-            entropy_per_level.clear();
-            count_per_level.clear();
-            supSize_array_level.clear();
-            uniformity_array_level.clear();
-
-            // Load the arrays from their respective files
-            std::ifstream per_level_data(fname + "_level_data.bin", std::ios::binary);
-            if (per_level_data.is_open()) {
-                size_t num_levels;
-                per_level_data.read(reinterpret_cast<char*>(&num_levels), sizeof(size_t));
-                
-                for (size_t i = 0; i < num_levels; i++) {
-                    int64_t level;
-                    int unique_count, total_count, oneHots;
-                    double entropy, count, supSize, uniformity;
-                    
-                    per_level_data.read(reinterpret_cast<char*>(&level), sizeof(int64_t));
-                    per_level_data.read(reinterpret_cast<char*>(&unique_count), sizeof(int));
-                    per_level_data.read(reinterpret_cast<char*>(&total_count), sizeof(int));
-                    per_level_data.read(reinterpret_cast<char*>(&oneHots), sizeof(int));
-                    per_level_data.read(reinterpret_cast<char*>(&entropy), sizeof(double));
-                    per_level_data.read(reinterpret_cast<char*>(&count), sizeof(double));
-                    per_level_data.read(reinterpret_cast<char*>(&supSize), sizeof(double));
-                    per_level_data.read(reinterpret_cast<char*>(&uniformity), sizeof(double));
-                    
-                    num_unique_contexts_per_level[level] = unique_count;
-                    num_total_contexts_per_level[level] = total_count;
-                    num_oneHots_per_level[level] = oneHots;
-                    entropy_per_level[level] = entropy;
-                    count_per_level[level] = count;
-                    supSize_array_level[level] = supSize;
-                    uniformity_array_level[level] = uniformity;
-                }
-                per_level_data.close();
-            }
-
-            // Note: countLog_array, ctxLen_array, and ctxCount_array are already loaded
-            // through the MemMapArray constructors in the initialization list
-
             std::cout << "Successfully loaded Trie with following statistics:" << std::endl;
             std::cout << "Number of unique contexts: " << num_unique_contexts.load() << std::endl;
             std::cout << "Number of total contexts: " << num_total_contexts.load() << std::endl;
             std::cout << "Context length: " << context_length << std::endl;
-            std::cout << "Node counter: " << node_counter.load() << std::endl;
-            
         } catch (const std::exception& e) {
             if (mapped_memory != MAP_FAILED) {
                 munmap(mapped_memory, allocated_size);
@@ -485,6 +417,325 @@ public:
             throw std::runtime_error("Error loading metadata: " + std::string(e.what()));
         }
     }
+
+    // Add a new method to serialize RAM trie to memory-mapped file
+    // void serialize_to_mmap() {
+    //     if (!is_construction_mode) {
+    //         throw std::runtime_error("Not in construction mode");
+    //     }
+
+    //     // Calculate total size needed
+    //     size_t total_size = 0;
+    //     std::vector<size_t> node_offsets(nodes.size());
+    //     std::vector<size_t> children_offsets(nodes.size());
+        
+    //     // First all nodes
+    //     total_size = nodes.size() * sizeof(MMAPTrieNode);
+        
+    //     // Then all child arrays
+    //     for (size_t i = 0; i < nodes.size(); i++) {
+    //         node_offsets[i] = i * sizeof(MMAPTrieNode);
+    //         children_offsets[i] = total_size;
+    //         total_size += nodes[i].children.size() * sizeof(std::pair<int64_t, int64_t>);
+    //     }
+
+    //     // Create and map file
+    //     fd = open(filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    //     if (fd == -1) throw std::runtime_error("Failed to create file");
+        
+    //     if (ftruncate(fd, total_size) == -1) {
+    //         close(fd);
+    //         throw std::runtime_error("Failed to set file size");
+    //     }
+        
+    //     mapped_memory = static_cast<char*>(mmap(NULL, total_size, PROT_READ | PROT_WRITE, 
+    //                                         MAP_SHARED, fd, 0));
+        
+    //     // Write nodes and children
+    //     for (size_t i = 0; i < nodes.size(); i++) {
+    //         auto& ram_node = nodes[i];
+    //         MMAPTrieNode mmap_node{
+    //             ram_node.count,
+    //             static_cast<int64_t>(ram_node.children.size()),
+    //             static_cast<int64_t>(children_offsets[i]),
+    //             ram_node.node_level
+    //         };
+            
+    //         memcpy(mapped_memory + node_offsets[i], &mmap_node, sizeof(MMAPTrieNode));
+            
+    //         if (!ram_node.children.empty()) {
+    //             memcpy(mapped_memory + children_offsets[i],
+    //                 ram_node.children.data(),
+    //                 ram_node.children.size() * sizeof(std::pair<int64_t, int64_t>));
+    //         }
+    //     }
+
+    //     // Save metadata
+    //     save_metadata();
+
+    //     // Clear RAM structure and switch modes
+    //     std::vector<RAMTrieNode>().swap(nodes);
+    //     is_construction_mode = false;
+    // }
+
+    // void serialize_to_mmap() {
+    //     if (!is_construction_mode) {
+    //         throw std::runtime_error("Already in mmap mode");
+    //     }
+
+    //     // Calculate total size needed
+    //     size_t total_size = 0;
+    //     std::vector<size_t> node_offsets(nodes.size());
+    //     std::vector<size_t> children_offsets(nodes.size());
+        
+    //     // First all nodes
+    //     total_size = nodes.size() * sizeof(MMAPTrieNode);
+        
+    //     // Then all child arrays
+    //     for (size_t i = 0; i < nodes.size(); i++) {
+    //         node_offsets[i] = i * sizeof(MMAPTrieNode);
+    //         children_offsets[i] = total_size;
+    //         total_size += nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>);
+    //     }
+
+    //     // Create and map file
+    //     // ... (file creation code as before)
+
+    //     // Write all nodes
+    //     for (size_t i = 0; i < nodes.size(); i++) {
+    //         auto& ram_node = nodes[i];
+    //         MMAPTrieNode mmap_node{
+    //             ram_node.count,
+    //             ram_node.num_children,
+    //             static_cast<int64_t>(children_offsets[i]),
+    //             ram_node.node_level
+    //         };
+            
+    //         memcpy(mapped_memory + node_offsets[i], &mmap_node, sizeof(MMAPTrieNode));
+            
+    //         // Write children if any
+    //         if (ram_node.num_children > 0) {
+    //             memcpy(mapped_memory + children_offsets[i],
+    //                 ram_node.children,
+    //                 ram_node.num_children * sizeof(std::pair<int64_t, int64_t>));
+    //         }
+    //     }
+    // }
+
+    // void serialize_to_mmap() {
+    //     std::cout << "----serialize_to_mmap----" << std::endl;
+        
+    //     if (!is_construction_mode) {
+    //         throw std::runtime_error("Already in mmap mode");
+    //     }
+
+    //     // Calculate total size needed
+    //     size_t total_size = 0;
+    //     std::vector<size_t> node_offsets(nodes.size());
+    //     std::vector<size_t> children_offsets(nodes.size());
+        
+    //     // First all nodes
+    //     total_size = nodes.size() * sizeof(MMAPTrieNode);
+        
+    //     // Then all child arrays
+    //     for (size_t i = 0; i < nodes.size(); i++) {
+    //         node_offsets[i] = i * sizeof(MMAPTrieNode);
+    //         children_offsets[i] = total_size;
+    //         if (nodes[i].children != nullptr && nodes[i].num_children > 0) {
+    //             total_size += nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>);
+    //         }
+    //     }
+
+    //     // Create and map file
+    //     fd = open(filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    //     if (fd == -1) {
+    //         throw std::runtime_error("Failed to create file for memory mapping");
+    //     }
+
+    //     // Set the file size
+    //     if (ftruncate(fd, total_size) == -1) {
+    //         close(fd);
+    //         throw std::runtime_error("Failed to set file size");
+    //     }
+
+    //     // Map the file
+    //     mapped_memory = static_cast<char*>(mmap(NULL, total_size, PROT_READ | PROT_WRITE, 
+    //                                         MAP_SHARED, fd, 0));
+    //     if (mapped_memory == MAP_FAILED) {
+    //         close(fd);
+    //         throw std::runtime_error("Failed to map file to memory");
+    //     }
+
+    //     // Write all nodes
+    //     for (size_t i = 0; i < nodes.size(); i++) {
+    //         auto& ram_node = nodes[i];
+
+    //         if (i < 5 || i > nodes.size() - 5) {  // Debug first and last few nodes
+    //             std::cout << "Node " << i << ": count=" << ram_node.count 
+    //                     << ", num_children=" << ram_node.num_children 
+    //                     << ", offset=" << children_offsets[i] << std::endl;
+    //         }
+            
+    //         MMAPTrieNode mmap_node{
+    //             ram_node.count,
+    //             ram_node.num_children,
+    //             static_cast<int64_t>(children_offsets[i]),
+    //             ram_node.node_level
+    //         };
+            
+    //         memcpy(mapped_memory + node_offsets[i], &mmap_node, sizeof(MMAPTrieNode));
+            
+    //         // Write children if any
+    //         if (ram_node.children != nullptr && ram_node.num_children > 0) {
+    //             memcpy(mapped_memory + children_offsets[i],
+    //                 ram_node.children,
+    //                 ram_node.num_children * sizeof(std::pair<int64_t, int64_t>));
+    //         }
+    //     }
+
+    //     // Update file size and allocated size
+    //     file_size = total_size;
+    //     allocated_size = total_size;
+
+    //     // Save metadata
+    //     save_metadata();
+
+    //     // Clean up RAM structures
+    //     for (auto& node : nodes) {
+    //         delete[] node.children;
+    //     }
+    //     nodes.clear();
+    //     nodes.shrink_to_fit();
+
+    //     // Switch mode
+    //     is_construction_mode = false;
+
+    //     std::cout << "----serialization_complete----" << std::endl;
+    // }
+
+    void serialize_to_mmap() {
+        std::cout << "----serialize_to_mmap----" << std::endl;
+        
+        if (!is_construction_mode) {
+            throw std::runtime_error("Already in mmap mode");
+        }
+
+        // First calculate where each node will be stored
+        size_t total_nodes = nodes.size();
+        std::vector<size_t> node_addresses(total_nodes);  // Where each node will be stored
+        
+
+        // SOME DEBUG PRINTING
+        std::cout << "=== Starting serialization ===" << std::endl;
+        std::cout << "Total nodes to write: " << nodes.size() << std::endl;
+
+        // When writing nodes & children
+        for (size_t i = 0; i < total_nodes; i++) {
+            auto& ram_node = nodes[i];
+            std::cout << "\nWriting node " << i << ":" << std::endl;
+            std::cout << "- children count: " << ram_node.num_children << std::endl;
+            if (ram_node.num_children > 0) {
+                std::cout << "- children values: ";
+                for (int j = 0; j < ram_node.num_children; j++) {
+                    std::cout << "(" << ram_node.children[j].first 
+                            << "," << ram_node.children[j].second << ") ";
+                }
+                std::cout << std::endl;
+            }
+        }
+
+        // First block: all nodes
+        size_t current_offset = 0;
+        for (size_t i = 0; i < total_nodes; i++) {
+            node_addresses[i] = current_offset;
+            current_offset += sizeof(MMAPTrieNode);
+        }
+
+        // Second block: all children arrays
+        size_t children_start = current_offset;  // Start of children arrays section
+        std::vector<size_t> children_addresses(total_nodes);
+        
+        for (size_t i = 0; i < total_nodes; i++) {
+            children_addresses[i] = current_offset;
+            if (nodes[i].num_children > 0) {
+                current_offset += nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>);
+            }
+        }
+
+        std::cout << "Debug offsets:\n";
+        for (size_t i = 0; i < std::min(total_nodes, size_t(5)); i++) {
+            std::cout << "Node " << i << ": address=" << node_addresses[i] 
+                    << ", children_address=" << children_addresses[i] << std::endl;
+        }
+
+        size_t total_size = current_offset;
+        std::cout << "total_size: " << total_size << std::endl;
+
+        // Create and map file
+        fd = open(filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        if (fd == -1) {
+            throw std::runtime_error("Failed to create file for memory mapping");
+        }
+
+        // Set the file size
+        if (ftruncate(fd, total_size) == -1) {
+            close(fd);
+            throw std::runtime_error("Failed to set file size");
+        }
+
+        // Map the file
+        mapped_memory = static_cast<char*>(mmap(NULL, total_size, PROT_READ | PROT_WRITE, 
+                                            MAP_SHARED, fd, 0));
+        if (mapped_memory == MAP_FAILED) {
+            close(fd);
+            throw std::runtime_error("Failed to map file to memory");
+        }
+
+        // Write all nodes first
+        for (size_t i = 0; i < total_nodes; i++) {
+            MMAPTrieNode mmap_node{
+                nodes[i].count,
+                nodes[i].num_children,
+                children_addresses[i],  // Point to where children array will be
+                nodes[i].node_level
+            };
+            memcpy(mapped_memory + node_addresses[i], &mmap_node, sizeof(MMAPTrieNode));
+        }
+
+        for (size_t i = 0; i < total_nodes; i++) {
+            if (nodes[i].num_children > 0) {
+                std::vector<std::pair<int64_t, int64_t>> child_pairs(nodes[i].num_children);
+                for (int64_t j = 0; j < nodes[i].num_children; j++) {
+                    // Store both value and address
+                    child_pairs[j] = {
+                        nodes[i].children[j].first,  // Original value
+                        node_addresses[nodes[i].children[j].second]  // Address where child is stored
+                    };
+                }
+                // Write array of child pairs
+                memcpy(mapped_memory + children_addresses[i], 
+                    child_pairs.data(), 
+                    nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>));
+            }
+        }
+
+        // Update sizes and clean up
+        file_size = total_size;
+        allocated_size = total_size;
+        save_metadata();
+
+        // Clean up and switch mode
+        for (auto& node : nodes) {
+            delete[] node.children;
+        }
+        nodes.clear();
+        nodes.shrink_to_fit();
+        is_construction_mode = false;
+
+        std::cout << "----serialization_complete----" << std::endl;
+    }
+
+
 
     void save_metadata() {
         // Save main metadata
@@ -498,13 +749,7 @@ public:
         file << num_unique_contexts.load() << "\n";
         file << num_total_contexts.load() << "\n";
         file << context_length << "\n";
-        file << node_counter << "\n";
-        file << node_mutex_counter << "\n";
 
-        // Save the level-specific data
-        for (const auto& [level, count] : num_unique_contexts_per_level) {
-            file << "level " << level << " " << count << "\n";
-        }
         file.close();
 
         // Save additional array data in binary format
@@ -514,29 +759,7 @@ public:
             throw std::runtime_error("Failed to open level data file for writing");
         }
 
-        // Write number of levels
-        size_t num_levels = num_unique_contexts_per_level.size();
-        per_level_data.write(reinterpret_cast<const char*>(&num_levels), sizeof(size_t));
-
         // Write all level-specific data
-        for (const auto& [level, _] : num_unique_contexts_per_level) {
-            per_level_data.write(reinterpret_cast<const char*>(&level), sizeof(int64_t));
-            int unique_count = num_unique_contexts_per_level[level];
-            int total_count = num_total_contexts_per_level[level];
-            int oneHots = num_oneHots_per_level[level];
-            double entropy = entropy_per_level[level];
-            double count = count_per_level[level];
-            double supSize = supSize_array_level[level];
-            double uniformity = uniformity_array_level[level];
-            
-            per_level_data.write(reinterpret_cast<const char*>(&unique_count), sizeof(int));
-            per_level_data.write(reinterpret_cast<const char*>(&total_count), sizeof(int));
-            per_level_data.write(reinterpret_cast<const char*>(&oneHots), sizeof(int));
-            per_level_data.write(reinterpret_cast<const char*>(&entropy), sizeof(double));
-            per_level_data.write(reinterpret_cast<const char*>(&count), sizeof(double));
-            per_level_data.write(reinterpret_cast<const char*>(&supSize), sizeof(double));
-            per_level_data.write(reinterpret_cast<const char*>(&uniformity), sizeof(double));
-        }
         per_level_data.close();
 
         std::cout << "----Saver----" << std::endl;
@@ -561,21 +784,10 @@ public:
             num_total_contexts.store(num_total_contexts_val);
             file >> context_length;
 
-            int64_t temp_counter; 
-            
-            file >> temp_counter;
-            node_counter.store(temp_counter);
-
-            file >> temp_counter;
-            node_mutex_counter.store(temp_counter);
-
             // Assuming a known format
             std::string temp;
             int64_t level;
             int count;
-            while (file >> temp >> level >> count) {
-                num_unique_contexts_per_level[level] = count;
-            }
             file.close();
         }
         std::cout << "----Loader----" << std::endl;
@@ -585,103 +797,90 @@ public:
     }
 
 
-    ~Trie_module_protV1() {
-        if (mapped_memory != MAP_FAILED) {
-            munmap(mapped_memory, allocated_size);
-        }
-        if (fd != -1) {
-            // Truncate the file to the actually used size before closing
-            ftruncate(fd, file_size);
-            close(fd);
-        }
-        std::cout << "Destroyed the trie."<< std::endl;
-    }
+    // ~Trie_module_protV1() {
+    //     if (is_construction_mode) {
+    //         // Clean up RAM structures
+    //         nodes.clear();
+    //         nodes.shrink_to_fit();
+    //     } else {
+    //         // Clean up memory-mapped resources
+    //         if (mapped_memory != MAP_FAILED) {
+    //             munmap(mapped_memory, allocated_size);
+    //         }
+    //         if (fd != -1) {
+    //             // Truncate the file to the actually used size before closing
+    //             ftruncate(fd, file_size);
+    //             close(fd);
+    //         }
+    //     }
+    //     std::cout << "Destroyed the trie." << std::endl;
+    // }
 
+    ~Trie_module_protV1() {
+        if (is_construction_mode) {
+            // Clean up RAM structures
+            for (auto& node : nodes) {
+                delete[] node.children;
+            }
+            nodes.clear();
+            nodes.shrink_to_fit();
+        } else {
+            // Clean up memory-mapped resources as before
+            if (mapped_memory != MAP_FAILED) {
+                munmap(mapped_memory, allocated_size);
+            }
+            if (fd != -1) {
+                ftruncate(fd, file_size);
+                close(fd);
+            }
+        }
+    }
+    
     std::vector<std::unordered_map<int64_t, double>> insert_context(const torch::Tensor& tensor, int64_t column, bool return_prob_distr) {   
         std::vector<std::unordered_map<int64_t, double>> distributions;
         auto accessor = tensor.accessor<int64_t, 2>();
         int64_t current_level = 0;
-        size_t current_offset = 0;
+        size_t current_index = 0;  // Start at root
 
         for (int64_t j = 0; j < accessor.size(1); j++) {
             int64_t value = accessor[column][j];
             
-            TrieNode* current = get_node(current_offset);
+            RAMTrieNode* current = &nodes[current_index];
             
-            // Lock the current node
-            // std::lock_guard<std::mutex> lock(mutex_array_lock[current->node_mutex_index]);
-
             if (j > 0) {
                 num_total_contexts.fetch_add(1);
             }
             
+            // Find child if it exists
             int64_t child_index = -1;
-            if (current->num_children > 0) {
-                std::pair<int64_t, int64_t>* children = get_children(current);
-                child_index = find_child(children, current->num_children, value);
+            if (current->children != nullptr && current->num_children > 0) {
+                child_index = find_child(current, value);
             }
 
             if (child_index == -1) {
-                // Create new node (this is already thread-safe due to atomic operations)
-                size_t new_node_offset = allocate_node(current->node_level);
-                TrieNode* new_node = get_node(new_node_offset);
+                // Create new node
+                size_t new_node_index = nodes.size();
+                nodes.push_back(createNode(current->node_level));
                 
-                // Initialize new node (protected by the current node's lock)
-                new_node->count = 0;
-                new_node->num_children = 0;
-                new_node->children_offset = 0;
-                new_node->node_level = current_level + 1;
-
-                // if (new_node->node_level <= context_length) {
-                //     num_total_contexts_per_level[new_node->node_level]++;
-                // }
-
-                // Allocate children (protected by current node's lock)
-                if (current->num_children == 0) {
-                    current->children_offset = allocate_children(1);
-                } else {
-                    size_t new_children_offset = allocate_children(current->num_children + 1);
-                    std::memcpy(mapped_memory + new_children_offset, get_children(current), 
-                            current->num_children * sizeof(std::pair<int64_t, int64_t>));
-                    current->children_offset = new_children_offset;
-                }
-
-                insert_child(current, value, new_node_offset);
-                current_offset = new_node_offset;
-                supSize_array[current->node_index] += 1;
+                // Insert new child reference
+                insert_child(current, value, new_node_index);
+                current_index = new_node_index;
             } else {
-                current_offset = get_children(current)[child_index].second;
+                current_index = child_index;
             }
 
-            // Update counts and entropy data
-            TrieNode* next_node = get_node(current_offset);
-            int64_t c_t_temp = next_node->count;
-            
-            if (current->node_index > 0 && c_t_temp > 0 && current->node_level <= context_length) {
-                double log_value;
-                {
-                    std::lock_guard<std::mutex> log_lock(alloc_memory_mutex);
-                    if (logcalc_memory_insert[c_t_temp] == -1) {
-                        logcalc_memory_insert[c_t_temp] = (c_t_temp + 1) * std::log(c_t_temp + 1) - 
-                                                        (c_t_temp) * std::log(c_t_temp);
-                    }
-                    log_value = logcalc_memory_insert[c_t_temp];
-                }
-                countLog_array[current->node_index] += log_value;
-            }
-            
-            ctxCount_array[current->node_index] += 1;
-            next_node->count++;
-
+            // Update counts
+            nodes[current_index].count++;
             current_level++;
 
             if (return_prob_distr) {
-                // Create distribution (protected by current node's lock)
+                // Create distribution
                 std::unordered_map<int64_t, double> current_distribution;
-                std::pair<int64_t, int64_t>* children = get_children(current);
-                for (int64_t i = 0; i < current->num_children; i++) {
-                    TrieNode* child = get_node(children[i].second);
-                    current_distribution[children[i].first] = static_cast<double>(child->count);
+                if (current->children != nullptr) {
+                    for (int64_t i = 0; i < current->num_children; i++) {
+                        RAMTrieNode* child = &nodes[current->children[i].second];
+                        current_distribution[current->children[i].first] = static_cast<double>(child->count);
+                    }
                 }
                 distributions.push_back(current_distribution);
             }
@@ -736,9 +935,9 @@ public:
         }
 
         // Check if we're close to memory limit after insertion
-        if (is_close_to_memory_limit() || node_mutex_counter >= array_size - 5000 || node_counter >= array_size - 5000) {
-            save_metadata();
-        }
+        // if (is_close_to_memory_limit()) {
+        //     save_metadata();
+        // }
 
         // End timing and calculate duration
         auto end = std::chrono::high_resolution_clock::now();
@@ -752,45 +951,71 @@ public:
 
 
     std::vector<std::unordered_map<int64_t, double>> retrieve_context_softlabel(const torch::Tensor& tensor, int64_t column) {
+        if (is_construction_mode) {
+            throw std::runtime_error("Cannot retrieve in construction mode - need to serialize to mmap first");
+        }
+
         std::vector<std::unordered_map<int64_t, double>> distributions;
-        size_t current_offset = 0;
-        TrieNode* current = get_node(current_offset);
+        size_t current_offset = 0;  // Start at root
+        
+        // std::cout << "=== Starting retrieval ===" << std::endl;
+        // std::cout << "File size: " << file_size << std::endl;
+        
+        MMAPTrieNode* current = get_mmap_node(current_offset);
+        // std::cout << "Root node at offset " << current_offset << ":" << std::endl;
+        // std::cout << "- count: " << current->count << std::endl;
+        // std::cout << "- num_children: " << current->num_children << std::endl;
+        // std::cout << "- children_offset: " << current->children_offset << std::endl;
 
         auto accessor = tensor.accessor<int64_t, 2>();
 
         for (int64_t j = 0; j < accessor.size(1); j++) {
             int64_t value = accessor[column][j];
+            // std::cout << "\nLooking for value: " << value << std::endl;
 
-            int64_t child_index = -1;
             if (current->num_children > 0) {
-                std::pair<int64_t, int64_t>* children = get_children(current);
-                child_index = find_child(children, current->num_children, value);
+                std::pair<int64_t, int64_t>* children = get_mmap_children(current);
                 
+                // std::cout << "Current node has " << current->num_children << " children:" << std::endl;
+                // for (int64_t i = 0; i < current->num_children; i++) {
+                //     std::cout << "Child " << i << ": value=" << children[i].first 
+                //             << ", offset=" << children[i].second << std::endl;
+                // }
+                
+                int64_t child_index = find_child(children, current->num_children, value);
+                // std::cout << "find_child returned index: " << child_index << std::endl;
+
                 if (child_index != -1) {
-                    current_offset = children[child_index].second;
-                    current = get_node(current_offset);
+                    // std::cout << "Moving to child node at offset: " << children[child_index].second << std::endl;
+                    current = get_mmap_node(children[child_index].second);
                     
-                    // Get raw counts for current node's children
                     std::unordered_map<int64_t, double> distribution;
                     if (current->num_children > 0) {
-                        std::pair<int64_t, int64_t>* next_children = get_children(current);
-                        for (int64_t j = 0; j < current->num_children; j++) {
-                            TrieNode* child = get_node(next_children[j].second);
-                            distribution[next_children[j].first] = static_cast<double>(child->count);
+                        std::pair<int64_t, int64_t>* next_children = get_mmap_children(current);
+                        // std::cout << "Building distribution from " << current->num_children << " children:" << std::endl;
+                        for (int64_t k = 0; k < current->num_children; k++) {
+                            MMAPTrieNode* child = get_mmap_node(next_children[k].second);
+                            distribution[next_children[k].first] = static_cast<double>(child->count);
+                            // std::cout << "Added to distribution: " << next_children[k].first 
+                            //         << " -> " << child->count << std::endl;
                         }
                     }
                     distributions.push_back(distribution);
+                    // std::cout << "Added distribution of size: " << distribution.size() << std::endl;
                 } else {
+                    // std::cout << "Value not found, returning early" << std::endl;
                     return distributions;
                 }
             } else {
+                // std::cout << "Node has no children, returning early" << std::endl;
                 return distributions;
             }
         }
         
+        // std::cout << "=== Retrieval complete ===" << std::endl;
+        // std::cout << "Returning " << distributions.size() << " distributions" << std::endl;
         return distributions;
     }
-
 
     py::list retrieve_softlabel(const torch::Tensor& tensor) {
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
@@ -821,317 +1046,78 @@ public:
         return soft_label_list;
     }
 
-    std::unordered_map<std::vector<int64_t>, int64_t> collect_all_sequences() {
-        std::unordered_map<std::vector<int64_t>, int64_t> sequences;
-        std::vector<int64_t> current_sequence;
-        collect_sequences(0, current_sequence, sequences);
-        return sequences;
-    }
+
+    // size_t get_memory_usage() const {
+    //     if (is_construction_mode) {
+    //         // For RAM mode, return total bytes used by nodes vector
+    //         size_t total_bytes = 0;
+    //         for (const auto& node : nodes) {
+    //             // Size of node itself
+    //             total_bytes += sizeof(RAMTrieNode);
+    //             // Size of its children vector
+    //             total_bytes += node.children.capacity() * sizeof(std::pair<int64_t, int64_t>);
+    //         }
+    //         return total_bytes;
+    //     } else {
+    //         // For mmap mode, return file size as before
+    //         return file_size;
+    //     }
+    // }
+
+    // size_t get_allocated_size() const {
+    //     if (is_construction_mode) {
+    //         // For RAM mode, return total reserved capacity
+    //         return nodes.capacity() * sizeof(RAMTrieNode);
+    //     } else {
+    //         // For mmap mode, return allocated size as before
+    //         return allocated_size;
+    //     }
+    // }
 
     size_t get_memory_usage() const {
-        return file_size;
+        if (is_construction_mode) {
+            // For RAM mode, calculate total bytes used
+            size_t total_bytes = 0;
+            for (const auto& node : nodes) {
+                // Size of node itself
+                total_bytes += sizeof(RAMTrieNode);
+                // Size of its children array if allocated
+                if (node.children != nullptr) {
+                    total_bytes += node.children_capacity * sizeof(std::pair<int64_t, int64_t>);
+                }
+            }
+            return total_bytes;
+        } else {
+            // For mmap mode, return file size as before
+            return file_size;
+        }
     }
 
     size_t get_allocated_size() const {
-        return allocated_size;
-    }
-
-
-
-
-
-    EntropyResult  calculate_and_get_entropy_faster_root() {
-        DEBUG_PRINT("________________________________________________________________");
-        DEBUG_PRINT("calculate_and_get_entropy_faster_root");
-
-        // int64_t total_N = 0;
-        double total_entropy = 0;
-        double entropy_temp = 0;
-
-        for (auto& pair : num_unique_contexts_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-        for (auto& pair : entropy_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        for (auto& pair : count_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        for (auto& pair : supSize_array_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        for (auto& pair : uniformity_array_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        for (auto& pair : num_oneHots_per_level) {
-            pair.second = 0;  // Set the num OneHots to zero for each level
-        }
-
-        for (auto& pair : num_total_contexts_per_level) {
-            pair.second = 0;  // Set the num OneHots to zero for each level
-        }
-
-
-        int64_t number_of_oneHots = 0;
-        num_unique_contexts = 0;
-        num_total_contexts = 0;
-
-        int64_t total_counter = 0;
-        int counter = 0;
-        DEBUG_PRINT(node_counter);
-        DEBUG_PRINT("Printing entropy: ");
-        #pragma omp parallel for reduction(+:total_entropy,total_counter,number_of_oneHots,count_per_level[:context_length+1],num_unique_contexts_per_level[:context_length+1],entropy_per_level[:context_length+1], num_oneHots_per_level[:context_length+1])
-        for(int j = 1; j <= node_counter; j++){
-
-            entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
-
-            // DEBUG_PRINT(ctxCount_array[j]);
-            if (ctxCount_array[j] == 0){
-                counter += 1;
-                if (counter == 100){
-                    DEBUG_PRINT("Quitting since the counter is 0.");
-                    return EntropyResult(0.0, 0, 0);
+        if (is_construction_mode) {
+            // For RAM mode, return total reserved capacity
+            size_t total_size = nodes.capacity() * sizeof(RAMTrieNode);
+            for (const auto& node : nodes) {
+                if (node.children != nullptr) {
+                    total_size += node.children_capacity * sizeof(std::pair<int64_t, int64_t>);
                 }
             }
-
-            if (entropy_temp == 0.0){
-                number_of_oneHots += ctxCount_array[j];
-                num_oneHots_per_level[ctxLen_array[j]] += ctxCount_array[j];
-            } else {
-                uniformity_array_level[ctxLen_array[j]] += ctxCount_array[j] * entropy_temp / log(supSize_array[j]);
-            }
-
-            num_unique_contexts_per_level[ctxLen_array[j]] += 1;
-            entropy_per_level[ctxLen_array[j]] += entropy_temp;
-            num_total_contexts_per_level[ctxLen_array[j]] += ctxCount_array[j];
-            num_unique_contexts += 1;
-            
-            total_entropy += entropy_temp;
-
-            total_counter += ctxCount_array[j];
-            count_per_level[ctxLen_array[j]] += ctxCount_array[j];     
-            supSize_array_level[ctxLen_array[j]] += supSize_array[j];
-
-
-        }  
-
-        DEBUG_PRINT("total_entropy: " << total_entropy);
-        DEBUG_PRINT("total_counter: " << total_counter);
-
-        total_entropy = -total_entropy / total_counter;
-        for(int t = 0; t <= context_length ; t++){
-            entropy_per_level[t] /= -count_per_level[t];
-            supSize_array_level[t] /= count_per_level[t];
-            uniformity_array_level[t] /= count_per_level[t];
+            return total_size;
+        } else {
+            // For mmap mode, return allocated size as before
+            return allocated_size;
         }
-
-        double perc_of_oneHots = number_of_oneHots / total_counter;
-        DEBUG_PRINT("Percentage of OneHots is: " << perc_of_oneHots);
-        DEBUG_PRINT("number_of_oneHots: " << number_of_oneHots);
-        DEBUG_PRINT("total_counter: " << total_counter);
-
-        // num_unique_contexts = node_counter.load();
-        num_total_contexts = total_counter;
-        
-        // return total_entropy;  // Normalize by total number of nodes
-        return EntropyResult(total_entropy, total_counter, number_of_oneHots);
     }
-    
-    
-
-    EntropyResult  calculate_and_get_entropy_faster_branch() {
-        DEBUG_PRINT("________________________________________________________________");
-        DEBUG_PRINT("calculate_and_get_entropy_faster_branch");
-
-        // int64_t total_N = 0;
-        double total_entropy = 0;
-        double entropy_temp = 0;
-
-        for (auto& pair : num_unique_contexts_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-        for (auto& pair : entropy_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        for (auto& pair : count_per_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        for (auto& pair : num_oneHots_per_level) {
-            pair.second = 0;  // Set the num OneHots to zero for each level
-        }
-
-        for (auto& pair : num_total_contexts_per_level) {
-            pair.second = 0;  // Set the num OneHots to zero for each level
-        }
-
-        for (auto& pair : supSize_array_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        for (auto& pair : uniformity_array_level) {
-            pair.second = 0;  // Set the count to zero for each level
-        }
-
-        int64_t number_of_oneHots = 0;
-
-        num_unique_contexts = 0;
-        num_total_contexts = 0;
-
-        int64_t total_counter = 0;
-        int counter = 0;
-        DEBUG_PRINT(node_counter);
-        DEBUG_PRINT("Printing entropy: ");
-        #pragma omp parallel for reduction(+:total_entropy,total_counter,number_of_oneHots,count_per_level[:context_length+1],supSize_array_level[:context_length+1],num_unique_contexts_per_level[:context_length+1],entropy_per_level[:context_length+1], num_oneHots_per_level[:context_length+1])
-        for(int j = 1; j <= node_counter; j++){
-
-            if (ctxLen_array[j] >= 3){
-                entropy_temp = countLog_array[j] - ctxCount_array[j] * log(ctxCount_array[j]);
-
-                // DEBUG_PRINT(ctxCount_array[j]);
-                if (ctxCount_array[j] == 0){
-                    counter += 1;
-                    if (counter == 100){
-                        DEBUG_PRINT("Quitting since the counter is 0.");
-                        return EntropyResult(0.0, 0, 0);
-                    }
-                }
-
-                if (entropy_temp == 0.0){
-                    number_of_oneHots += ctxCount_array[j];
-                    num_oneHots_per_level[ctxLen_array[j]] += ctxCount_array[j];
-                } else {
-                    uniformity_array_level[ctxLen_array[j]] += ctxCount_array[j] * entropy_temp / log(supSize_array[j]);
-                }
-                
-                num_unique_contexts_per_level[ctxLen_array[j]] += 1;
-                entropy_per_level[ctxLen_array[j]] += entropy_temp;
-                num_total_contexts_per_level[ctxLen_array[j]] += ctxCount_array[j];
-                num_unique_contexts += 1;
-                
-                total_entropy += entropy_temp;
-
-                total_counter += ctxCount_array[j];
-                count_per_level[ctxLen_array[j]] += ctxCount_array[j];
-                supSize_array_level[ctxLen_array[j]] += supSize_array[j];
-            }
-            
-
-        }  
-
-        DEBUG_PRINT("total_entropy: " << total_entropy);
-        DEBUG_PRINT("total_counter: " << total_counter);
-
-        total_entropy = -total_entropy / total_counter;
-        for(int t = 0; t <= context_length ; t++){
-            entropy_per_level[t] /= -count_per_level[t];
-            supSize_array_level[t] /= count_per_level[t];
-            uniformity_array_level[t] /= count_per_level[t];
-        }
-
-        double perc_of_oneHots = (double)number_of_oneHots / total_counter;
-        DEBUG_PRINT("Percentage of OneHots is: " << perc_of_oneHots);
-        DEBUG_PRINT("number_of_oneHots: " << number_of_oneHots);
-        DEBUG_PRINT("total_counter: " << total_counter);
-
-        // num_unique_contexts = node_counter.load();
-        num_total_contexts = total_counter;
-        
-        // return total_entropy;  // Normalize by total number of nodes
-        return EntropyResult(total_entropy, total_counter, number_of_oneHots);
-    }
-
 
     int64_t get_num_unique_contexts() const {
+        // Works same way in both modes
         return num_unique_contexts.load();
     }
 
     int64_t get_num_total_contexts() const {
+        // Works same way in both modes
         return num_total_contexts.load();
     }
-
-    std::unordered_map<int64_t, double> get_children_distribution(const std::vector<int64_t>& sequence) {
-        std::unordered_map<int64_t, double> distribution;
-
-        size_t node_offset = find_node(sequence);
-        if (node_offset == -1) {
-            return distribution;  // Return empty map if sequence not found
-        }
-
-        TrieNode* node = get_node(node_offset);
-        std::pair<int64_t, int64_t>* children = get_children(node);
-
-        int64_t total_children_count = 0;
-        for (int64_t i = 0; i < node->num_children; ++i) {
-            TrieNode* child = get_node(children[i].second);
-            total_children_count += child->count;
-        }
-
-        for (int64_t i = 0; i < node->num_children; ++i) {
-            int64_t child_value = children[i].first;
-            TrieNode* child = get_node(children[i].second);
-            double probability = static_cast<double>(child->count) / total_children_count;
-            distribution[child_value] = probability;
-        }
-
-        return distribution;
-    }
-
-    int64_t get_node_count(const std::vector<int64_t>& sequence) {
-        size_t node_offset = find_node(sequence);
-        if (node_offset == -1) {
-            return 0;  // Return 0 if sequence not found
-        }
-
-        TrieNode* node = get_node(node_offset);
-        return node->count;
-    }
-
-    int64_t get_node_level(const std::vector<int64_t>& sequence) {
-        size_t node_offset = find_node(sequence);
-        if (node_offset == -1) {
-            return -1;  // Return -1 if sequence not found
-        }
-
-        TrieNode* node = get_node(node_offset);
-        return node->node_level;
-    }
-
-
-    // New method to get the number of nodes at each level
-    std::map<int64_t, int> get_num_unique_contexts_per_level() const {
-        return num_unique_contexts_per_level;
-    }
-
-    // New method to get the number of nodes at each level
-    std::map<int64_t, int> get_num_total_contexts_per_level() const {
-        return num_total_contexts_per_level;
-    }
-
-    // New method to get the number of nodes at each level
-    std::map<int64_t, double> get_entropy_per_level() const {
-        return entropy_per_level;
-    }
-
-    // New method to get the number of nodes at each level
-    std::map<int64_t, int> get_oneHots_per_level() const {
-        return num_oneHots_per_level;
-    }
-
-    std::map<int64_t, double> get_supSize_per_level() const {
-        return supSize_array_level;
-    }
-
-    std::map<int64_t, double> get_uniformity_per_level() const {
-        return uniformity_array_level;
-    }
-
-
 
 };
 
@@ -1152,46 +1138,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def(py::init<const std::string&>())
         .def("insert", &Trie_module_protV1::insert)
         .def("retrieve_softlabel", &Trie_module_protV1::retrieve_softlabel)
-        .def("collect_all_sequences", [](Trie_module_protV1& trie) {
-            auto sequences = trie.collect_all_sequences();
-            return convert_to_python_dict(sequences);
-        })
         .def("get_memory_usage", &Trie_module_protV1::get_memory_usage)
         .def("get_allocated_size", &Trie_module_protV1::get_allocated_size)
         .def("get_num_unique_contexts", &Trie_module_protV1::get_num_unique_contexts)  // New method to access num_unique_contexts
         .def("get_num_total_contexts", &Trie_module_protV1::get_num_total_contexts)  // New method to access num_unique_contexts
-        .def("get_children_distribution", &Trie_module_protV1::get_children_distribution)
-        .def("get_node_count", &Trie_module_protV1::get_node_count)
-        .def("get_node_level", &Trie_module_protV1::get_node_level)
-        .def("get_num_unique_contexts_per_level", &Trie_module_protV1::get_num_unique_contexts_per_level)
-        .def("get_num_total_contexts_per_level", &Trie_module_protV1::get_num_total_contexts_per_level)
-        .def("get_entropy_per_level", &Trie_module_protV1::get_entropy_per_level)
-        .def("get_oneHots_per_level", &Trie_module_protV1::get_oneHots_per_level)
-        .def("get_supSize_per_level", &Trie_module_protV1::get_supSize_per_level)
-        .def("get_uniformity_per_level", &Trie_module_protV1::get_uniformity_per_level)
-        .def("calculate_and_get_entropy_faster_branch", &Trie_module_protV1::calculate_and_get_entropy_faster_branch)
-        .def("calculate_and_get_entropy_faster_root", &Trie_module_protV1::calculate_and_get_entropy_faster_root)
         .def("load_metadata", &Trie_module_protV1::load_metadata)
-        .def("save_metadata", &Trie_module_protV1::save_metadata);
-    
-    py::class_<EntropyResult>(m, "EntropyResult")
-        .def_readonly("entropy", &EntropyResult::entropy)
-        .def_readonly("total_count", &EntropyResult::total_count)
-        .def_readonly("number_of_oneHots", &EntropyResult::number_of_oneHots);
+        .def("save_metadata", &Trie_module_protV1::save_metadata)
+        .def("serialize_to_mmap", &Trie_module_protV1::serialize_to_mmap);
+        
 
     py::class_<InsertResult>(m, "InsertResult")
         .def_readonly("result", &InsertResult::result)
         .def_readonly("execution_time_ms", &InsertResult::execution_time_ms);
-        
-
-    py::class_<MemMapArray<int64_t>>(m, "MemMapArrayInt")
-        .def(py::init<const std::string&, size_t>())
-        .def("get_size", &MemMapArray<int64_t>::getSize)
-        .def("__getitem__", [](MemMapArray<int64_t> &self, size_t index) { return self[index]; });
-    
-    py::class_<MemMapArray<double>>(m, "MemMapArrayDouble")
-        .def(py::init<const std::string&, size_t>())
-        .def("get_size", &MemMapArray<double>::getSize)
-        .def("__getitem__", [](MemMapArray<double> &self, size_t index) { return self[index]; });
 
 }

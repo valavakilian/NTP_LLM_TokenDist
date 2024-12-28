@@ -84,112 +84,15 @@ SIZE_NODE_BYTES = 56
 # CLI for constructing the dataset
 
 
-
-
-def plot_entropy_perCtxLen(data_log, file_path, precDone, ctx_len):
-    # Extract the values for each key across document counts (assuming document count is the key)
-    doc_counts = sorted(data_log['entropy'].keys())  # Assuming the keys are document counts
-    
-    target_ctx_lens = np.linspace(1, len(ctx_len) // 2, 8, dtype=int).tolist()
-    target_ctx_lens = [ctx_len[t] for t in target_ctx_lens]
-    
-    entropy = [data_log['entropy'][doc] for doc in doc_counts]
-    entropy_per_ctxLen = {}
-    for t in target_ctx_lens:
-        entropy_per_ctxLen[t] = [data_log['entropy_per_ctx_len'][doc][t] for doc in doc_counts]
-    
-    # Create subplots (3 rows, 1 column)
-    fig, axs = plt.subplots(1, 1, figsize=(5, 4))
-
-    
-    # Plot entropy
-    axs.plot(doc_counts, entropy, label='Total', marker='o', color = "black")
-    for t in target_ctx_lens:
-        axs.plot(doc_counts, entropy_per_ctxLen[t], label=f't = {t}', marker='o')
-    axs.set_xscale('log')
-    axs.set_yscale('log')
-    axs.set_xlabel('Number of Documents (log scale)')
-    axs.set_ylabel('Entropy (log scale)')
-    axs.set_title('Entropy over Documents(' + str(precDone) + ' % ' + 'complete)')
-    axs.grid(True, which="both", ls="--")
-    # Add text box for entropy difference
-    textstr = f'Entropy: {entropy[-1]:.6f}'
-    axs.text(0.05, 0.95, textstr, transform=axs.transAxes, fontsize=10, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    
-    axs.legend(loc='best')
-    # Adjust layout for better spacing
-    plt.tight_layout()
-    
-    # Display the plot
-    plt.savefig(file_path)
-    plt.clf()
-
-
-def plot_data_log_subplots(data_log, file_path, precDone):
-    # Extract the values for each key across document counts (assuming document count is the key)
-    doc_counts = sorted(data_log['entropy'].keys())  # Assuming the keys are document counts
-    
-    entropy = [data_log['entropy'][doc] for doc in doc_counts]
-    num_total_ctx = [data_log['num_total_ctx'][doc] for doc in doc_counts]
-    num_unique_ctx = [data_log['num_unique_ctx'][doc] for doc in doc_counts]
-    
-    # Create subplots (3 rows, 1 column)
-    fig, axs = plt.subplots(3, 1, figsize=(10, 12))
-
-    
-    # Plot entropy
-    axs[0].plot(doc_counts, entropy, label='Entropy Old', marker='o', color = "green")
-    axs[0].set_xscale('log')
-    axs[0].set_yscale('log')
-    axs[0].set_xlabel('Number of Documents (log scale)')
-    axs[0].set_ylabel('Entropy (log scale)')
-    axs[0].set_title('Entropy over Documents(' + str(precDone) + ' % ' + 'complete)')
-    axs[0].grid(True, which="both", ls="--")
-    # Add text box for entropy difference
-    textstr = f'Entropy: {entropy[-1]:.6f}'
-    axs[0].text(0.05, 0.95, textstr, transform=axs[0].transAxes, fontsize=10, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    
-    # Plot num_total_ctx
-    axs[1].plot(doc_counts, num_total_ctx, label='Total Contexts', marker='s', color='orange')
-    axs[1].set_xscale('log')
-    axs[1].set_yscale('log')
-    axs[1].set_xlabel('Number of Documents (log scale)')
-    axs[1].set_ylabel('Total Contexts (log scale)')
-    axs[1].set_title('Total Contexts over Documents')
-    axs[1].grid(True, which="both", ls="--")
-    
-    # Plot num_unique_ctx
-    axs[2].plot(doc_counts, num_unique_ctx, label='Unique Contexts', marker='^', color='green')
-    axs[2].set_xscale('log')
-    axs[2].set_yscale('log')
-    axs[2].set_xlabel('Number of Documents (log scale)')
-    axs[2].set_ylabel('Unique Contexts (log scale)')
-    axs[2].set_title('Unique Contexts over Documents')
-    axs[2].grid(True, which="both", ls="--")
-    
-    # Adjust layout for better spacing
-    plt.tight_layout()
-    
-    # Display the plot
-    plt.savefig(file_path)
-    plt.clf()
-
-
 def plot_calc_times(data_log, file_path, precDone):
     # Extract the values for each key across document counts (assuming document count is the key)
-    doc_counts = sorted(data_log['entropy_calc_time'].keys())  # Assuming the keys are document counts
+    doc_counts = sorted(data_log['insert_calc_time'].keys())  # Assuming the keys are document counts
     
-    entropy_calc_time = [data_log['entropy_calc_time'][doc] for doc in doc_counts]
     insert_calc_time = [data_log['insert_calc_time'][doc] for doc in doc_counts]
     
     # Create a plot
     plt.figure(figsize=(10, 6))
-    
-    # Plot entropy_calc_time
-    plt.plot(doc_counts, entropy_calc_time, label='Entropy Calculation Time Old', marker='o', color = "purple")
-    
+        
     # Plot insert_calc_time
     plt.plot(doc_counts, insert_calc_time, label='Insert Calculation Time Old', marker='s', color='orange')
     
@@ -200,10 +103,10 @@ def plot_calc_times(data_log, file_path, precDone):
     # Add labels and title
     plt.xlabel('Number of Documents (log scale)')
     plt.ylabel('Calculation Time (log scale)')
-    plt.title('Entropy Calc Time and Insert Time over #Ctx Seen (' + str(precDone) + ' % ' + 'complete)')
+    plt.title(' Insert Time over #Ctx Seen (' + str(precDone) + ' % ' + 'complete)')
 
     # Add text box for time differences
-    textstr = f'Time Entropy Calc: {entropy_calc_time[-1]:.2f}\nTime Insert Calc: {insert_calc_time[-1]:.2f}'
+    textstr = f'Time Insert Calc: {insert_calc_time[-1]:.2f}'
     plt.text(0.05, 0.95, textstr, transform=plt.gca().transAxes, fontsize=10, verticalalignment='top', 
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
@@ -266,7 +169,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     save_logs_filename_MT = f"TrieRoot.pkl"
     memap_filename_MT = f"{save_tree_folder}TrieRoot_MT"
     
-
+    num_examples = num_examples * args.batch_size
     Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.root_ctx_len + 1) * 20 // (1024**3)), 6)
 
        
@@ -352,45 +255,6 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
                 print(f"Inserting MT trie took: {data_log_MT['insert_calc_time'][contexts_count]} seconds.")
                 print("_"*30)
                 
-
-                print("_"*30)
-                # start_time_entropy = time.time()
-                start_time_entropy = timer()
-                result = context_tree_MT.calculate_and_get_entropy_faster_root()
-                entropy_tree_new = result.entropy
-                total_count = result.total_count
-                # data_log["entropy_calc_time"][contexts_count] = time.time() - start_time_entropy
-                data_log_MT["entropy_calc_time"][contexts_count] = timer() - start_time_entropy
-                print("Entropy MT: " + str(entropy_tree_new))
-                data_log_MT["entropy"][contexts_count] = entropy_tree_new
-                data_log_MT["total_count"][contexts_count] = total_count
-                
-                print(f"Entropy Calc took: {data_log_MT['entropy_calc_time'][contexts_count]} seconds.")
-                print("_"*30)
-
-                
-                data_log_MT["entropy_per_ctx_len"][contexts_count] = context_tree_MT.get_entropy_per_level()
-                data_log_MT["num_total_ctx"][contexts_count] = context_tree_MT.get_num_total_contexts()
-                data_log_MT["num_unique_ctx"][contexts_count] = context_tree_MT.get_num_unique_contexts()
-                data_log_MT["num_unique_ctx_len_list"][contexts_count] = context_tree_MT.get_num_unique_contexts_per_level()
-                data_log_MT["num_total_ctx_len_list"][contexts_count] = context_tree_MT.get_num_total_contexts_per_level()
-                data_log_MT["num_oneHots_list"][contexts_count] = context_tree_MT.get_oneHots_per_level()
-                data_log_MT["supSize_list"][contexts_count] = context_tree_MT.get_supSize_per_level()
-                data_log_MT["uniformity_list"][contexts_count] = context_tree_MT.get_uniformity_per_level()
-                
-
-                process = psutil.Process(os.getpid())
-                # print("Entropy value is: " + str(entropy_tree))
-                print('Physical RAM Used (GB):', process.memory_info().rss/(1024**3))
-                print('Physical RAM % Used (GB):', process.memory_percent())
-                print('MidPeak RAM Used (GB):', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/(1024**2))
-                print("_" * 100)
-
-
-                plot_data_log_subplots(data_log_MT, save_graph_folder + f"logs_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%OpWT.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_calc_times(data_log_MT, save_graph_folder + f"runtime_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%OpWT.jpg", precDone = round(batches_seen / len(dataloader) * 100, 2))
-                plot_entropy_perCtxLen(data_log_MT, save_graph_folder + f"entropy_voc_{args.vocab_size}_ctxLen_{args.context_length}_stride{args.stride}_{args.perc_stories}%OpWT.jpg", precDone = round(batches_seen / len(dataloader) * 100), ctx_len = [t for t in range(0, args.root_ctx_len)])
-
                 with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
                     pickle.dump(data_log_MT, pickle_file)
                 
@@ -507,11 +371,6 @@ if __name__ == "__main__":
     num_milestones = 100    
     context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)
     print("Tree loading/contruction complete")
-    result = context_tree.calculate_and_get_entropy_faster_root()
-    dataset_entropy = result.entropy
-    total_count = result.total_count
-    print("Entropy Calculated: " + str(dataset_entropy))
-    # dataset_entropy = 0
 
 
 
