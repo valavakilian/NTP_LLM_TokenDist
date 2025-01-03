@@ -71,6 +71,7 @@ from OpenWebText_loader_memap_sharded import *
 # CLI for constructing the dataset
 
 from timeit import default_timer as timer
+from multiprocessing import Pool, cpu_count
 
 
 import json
@@ -332,19 +333,207 @@ def plot_tuple_frequency(count_dict, filename):
     # plt.show()
 
 
+# def distribute_tuples(tuple_counts, num_bins):
+#     # Sort tuples by count in descending order
+#     sorted_tuples = sorted(tuple_counts.items(), key=lambda x: x[1], reverse=True)
+    
+#     # Initialize bins
+#     bins = [[] for _ in range(num_bins)]
+#     bin_sums = [0] * num_bins
+    
+#     # Assign each tuple to the bin with smallest current sum
+#     for tuple_val, count in sorted_tuples:
+#         min_bin = min(range(num_bins), key=lambda i: bin_sums[i])
+#         bins[min_bin].append(tuple_val)
+#         bin_sums[min_bin] += count
+    
+#     return bins, bin_sums
+
+# def distribute_tuples(tuple_counts, num_bins):
+#     """
+#     Memory-efficient tuple distribution that processes items in batches
+#     """
+#     print(f"Starting distribution of {len(tuple_counts):,} tuples into {num_bins} bins...")
+    
+#     # Initialize bins
+#     bins = [[] for _ in range(num_bins)]
+#     bin_sums = [0] * num_bins
+    
+#     # Process tuples in sorted batches
+#     batch_size = 100000
+#     processed = 0
+    
+#     # Get counts for efficient sorting
+#     counts_list = [(k, v) for k, v in tuple_counts.items()]
+#     counts_list.sort(key=lambda x: x[1], reverse=True)
+    
+#     print("Distributing tuples to bins...")
+#     for tuple_val, count in tqdm(counts_list):
+#         # Find bin with minimum sum
+#         min_bin = min(range(num_bins), key=lambda i: bin_sums[i])
+#         bins[min_bin].append(tuple_val)
+#         bin_sums[min_bin] += count
+        
+#         processed += 1
+#         if processed % batch_size == 0:
+#             print(f"\nProcessed {processed:,} tuples")
+#             print("Current bin loads:", bin_sums)
+    
+#     print("\nFinal bin loads:", bin_sums)
+#     print(f"Items per bin:", [len(b) for b in bins])
+    
+#     return bins, bin_sums
+
+
+
+# def distribute_tuples(tuple_counts, num_bins):
+#     """
+#     Fast approximate tuple distribution using parallel processing
+#     and a simple frequency-based approach
+#     """
+#     print(f"Starting fast distribution of {len(tuple_counts):,} tuples...")
+    
+#     # Convert to list and sort just by frequency
+#     items = [(k, v) for k, v in tuple_counts.items()]
+#     items.sort(key=lambda x: x[1], reverse=True)
+    
+#     # Simple round-robin distribution of top items
+#     bins = [[] for _ in range(num_bins)]
+#     bin_sums = [0] * num_bins
+    
+#     # Distribute top 20% of items carefully (they contain most of the frequency mass)
+#     top_items = items[:len(items)//5]
+#     for i, (tuple_val, count) in enumerate(top_items):
+#         bin_idx = i % num_bins
+#         bins[bin_idx].append(tuple_val)
+#         bin_sums[bin_idx] += count
+    
+#     # Fast batch distribution for the rest
+#     remaining_items = items[len(items)//5:]
+#     batch_size = len(remaining_items) // num_bins
+    
+#     for bin_idx in range(num_bins):
+#         start_idx = bin_idx * batch_size
+#         end_idx = start_idx + batch_size if bin_idx < num_bins - 1 else len(remaining_items)
+#         batch_items = remaining_items[start_idx:end_idx]
+        
+#         bins[bin_idx].extend(item[0] for item in batch_items)
+#         bin_sums[bin_idx] += sum(item[1] for item in batch_items)
+    
+#     print("\nFinal bin loads:", bin_sums)
+#     print(f"Items per bin:", [len(b) for b in bins])
+    
+#     return bins, bin_sums
+
+
+# def distribute_tuples(tuple_counts, num_bins):
+#     """
+#     Fast and reasonably balanced tuple distribution with progress tracking
+#     """
+#     print(f"\nStarting distribution of {len(tuple_counts):,} tuples into {num_bins} bins...")
+    
+#     # Convert to list and sort by frequency
+#     print("Converting to list...")
+#     items = [(k, v) for k, v in tqdm(tuple_counts.items(), desc="Converting tuples")]
+    
+#     print(f"\nSorting by frequency... there are {len(items)} items.")
+#     items.sort(key=lambda x: x[1], reverse=True)
+
+#     print("\nTop 10 most frequent token pairs:")
+#     sorted_items = sorted(items, key=lambda x: x[1], reverse=True)[:10]
+#     for pair, count in sorted_items:
+#         print(f"Token pair {pair}: appeared {count:,} times")
+#     # input()
+    
+#     # Initialize bins
+#     bins = [[] for _ in range(num_bins)]
+#     bin_sums = [0] * num_bins
+    
+#     # Handle top 20% of items carefully (they contain most of the weight)
+#     cutoff_idx = len(items) // 5
+#     print(f"\nCarefully distributing top {cutoff_idx:,} high-frequency items...")
+    
+#     # Process high-frequency items with progress bar
+#     for tuple_val, count in tqdm(items[:cutoff_idx], desc="Processing high-freq items"):
+#         min_bin_idx = min(range(num_bins), key=lambda i: bin_sums[i])
+#         bins[min_bin_idx].append(tuple_val)
+#         bin_sums[min_bin_idx] += count
+        
+#         # Show intermediate stats every 10% of high-freq items
+#         if len(bins[min_bin_idx]) % (cutoff_idx // 10) == 0:
+#             print("\nIntermediate bin loads:")
+#             for i, sum_val in enumerate(bin_sums):
+#                 print(f"Bin {i}: {sum_val:,}")
+    
+#     print("\nCurrent bin loads after high-frequency distribution:")
+#     for i, sum_val in enumerate(bin_sums):
+#         print(f"Bin {i}: {sum_val:,}")
+    
+#     # Fast distribution for remaining items in chunks
+#     remaining = items[cutoff_idx:]
+#     chunk_size = len(remaining) // (num_bins * 2)  # Split into 2 chunks per bin
+#     print(f"\nQuickly distributing remaining {len(remaining):,} items in chunks of {chunk_size:,}...")
+    
+#     chunks = list(range(0, len(remaining), chunk_size))
+#     for i in tqdm(chunks, desc="Processing chunks"):
+#         batch = remaining[i:i + chunk_size]
+#         min_bin_idx = min(range(num_bins), key=lambda i: bin_sums[i])
+        
+#         bins[min_bin_idx].extend(item[0] for item in batch)
+#         batch_sum = sum(item[1] for item in batch)
+#         bin_sums[min_bin_idx] += batch_sum
+        
+#         # Show progress every 20% of chunks
+#         if (i // chunk_size) % (len(chunks) // 5) == 0:
+#             print(f"\nProcessed {i+chunk_size:,} / {len(remaining):,} items")
+    
+#     # Print final statistics
+#     total_sum = sum(bin_sums)
+#     mean_sum = total_sum / num_bins
+#     max_deviation = max(abs(s - mean_sum) for s in bin_sums)
+#     print("\nFinal Statistics:")
+#     print(f"Total frequency sum: {total_sum:,}")
+#     print(f"Mean bin load: {mean_sum:,.0f}")
+#     print(f"Max deviation from mean: {(max_deviation/mean_sum)*100:.1f}%")
+#     print("\nFinal bin loads:")
+#     for i, sum_val in enumerate(bin_sums):
+#         print(f"Bin {i}: {sum_val:,}")
+    
+#     return bins, bin_sums
+
+
 def distribute_tuples(tuple_counts, num_bins):
-    # Sort tuples by count in descending order
-    sorted_tuples = sorted(tuple_counts.items(), key=lambda x: x[1], reverse=True)
+    """
+    Fast tuple distribution with minimal overhead
+    """
+    print(f"\nStarting distribution of {len(tuple_counts):,} tuples...")
+    
+    # Convert to list and sort by frequency
+    print("Converting to list...")
+    items = [(k, v) for k, v in tqdm(tuple_counts.items(), desc="Converting tuples")]
+    
+    print("\nTop 10 most frequent token pairs:")
+    sorted_items = sorted(items, key=lambda x: x[1], reverse=True)[:10]
+    for pair, count in sorted_items:
+        print(f"Token pair {pair}: appeared {count:,} times")
+    
+    print("\nSorting all items...")
+    items.sort(key=lambda x: x[1], reverse=True)
     
     # Initialize bins
     bins = [[] for _ in range(num_bins)]
     bin_sums = [0] * num_bins
     
-    # Assign each tuple to the bin with smallest current sum
-    for tuple_val, count in sorted_tuples:
-        min_bin = min(range(num_bins), key=lambda i: bin_sums[i])
-        bins[min_bin].append(tuple_val)
-        bin_sums[min_bin] += count
+    # Simple round-robin distribution for top items
+    print(f"\nDistributing items across {num_bins} bins...")
+    for i, (tuple_val, count) in enumerate(tqdm(items)):
+        bin_idx = i % num_bins
+        bins[bin_idx].append(tuple_val)
+        bin_sums[bin_idx] += count
+    
+    print("\nFinal bin loads:")
+    for i, sum_val in enumerate(bin_sums):
+        print(f"Bin {i}: {sum_val:,}")
     
     return bins, bin_sums
 
@@ -467,7 +656,7 @@ if __name__ == "__main__":
 
     # firstTwo_token_bins = get_context_pair_frequencies(dataloader, max_batches=1000)
 
-    firstTwo_token_bins = train_loader.dataset.analyze_window_startPairs(prefix_length=2)
+    firstTwo_token_bins, pair_locations = train_loader.dataset.analyze_window_startPairs(prefix_length=2)
     
     
 
@@ -477,7 +666,7 @@ if __name__ == "__main__":
     # plot_frequency_distribution(first_token_bins, graph_tokenFirstDist_filename)
 
     graph_tokenFirstTwoDist_filename = f"{save_graph_folder}{filename}_firstTwoTokens.jpg"
-    plot_tuple_frequency(firstTwo_token_bins, graph_tokenFirstTwoDist_filename)
+    # plot_tuple_frequency(firstTwo_token_bins, graph_tokenFirstTwoDist_filename)
 
 
     print("Separating data into first two token bins ...")
@@ -505,6 +694,9 @@ if __name__ == "__main__":
 
         bin_assigned_indices = bins[b]
         np.save(bin_folder_path + 'indices.npy', bin_assigned_indices)
+
+        np.save(bin_folder_path + 'shuffled_indices_locations.npy', np.random.permutation([loc for pair in bin_assigned_indices for loc in pair_locations[pair]]))
+
     
 
     bin_folder_path = folder_Tries_path + f"group_root/"
@@ -523,4 +715,6 @@ if __name__ == "__main__":
 
         
 
-    
+# 1575758, 880615, 907213, 898132, 907213, 907213, 9072
+# Bin loads: [1033994, 894361, 894361, 894361, 1047738, 1047738, 1047738, 1047738, 907560, 1047738, 894455, 894359, 894360, 894360, 894360, 894360, 894360,
+# Bin loads: [1575758, 880615, 907213, 898132, 907213, 907213, 907213, 907213, 907213, 907213, 907213, 907213

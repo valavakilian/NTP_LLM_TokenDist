@@ -508,7 +508,7 @@ if __name__ == "__main__":
     context_length = 5
     batch_size = 2
     stride = 1
-    root_ctx_len = 2
+    root_ctx_len = 3
     
 
     # Example usage
@@ -605,6 +605,17 @@ if __name__ == "__main__":
         context_tree.serialize_to_mmap()
         save_trie_time = save_trie_time - time.time()
         print(f"Took {save_trie_time} time to save trie." )
+        
+
+
+        context_tree = None
+        save_tree_folder =  bin_folder_path + "context_trees_memap_cpp/"
+        save_graph_folder = bin_folder_path + "graph_trees_cpp/"
+        save_logs_folder =  bin_folder_path + "logs_trees_cpp/"
+        save_logs_filename_MT = f"Trie{args.group}.pkl"
+        memap_filename = f"{save_tree_folder}Trie{args.group}_MT"
+        context_tree = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename)
+
 
         context_tries[group] = context_tree
         print("Tree loading/contruction complete")
@@ -652,8 +663,8 @@ if __name__ == "__main__":
         for batch in dataloader:
             root_dist = context_tree_root.retrieve_softlabel(batch)
             branch_dist = context_tries[group].retrieve_softlabel(batch)
-            print(root_dist)
-            print(branch_dist)
+            # print(root_dist)
+            # print(branch_dist)
             for i in range(0, batch.shape[0]):
                 X = batch[i,:]
                 

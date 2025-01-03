@@ -27,56 +27,25 @@
 
 namespace py = pybind11;
 
-// Define a custom hash function for std::vector<int64_t>
-namespace std {
-    template <>
-    struct hash<std::vector<int64_t>> {
-        size_t operator()(const std::vector<int64_t>& v) const {
-            size_t seed = v.size();
-            for (auto& i : v) {
-                seed ^= std::hash<int64_t>{}(i) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-            }
-            return seed;
-        }
-    };
-}
-
 #define DEBUG_PRINT(x) std::cout << x << std::endl
 
 
-
-// struct RAMTrieNode {
-//     int64_t count;
-//     std::vector<std::pair<int64_t, int64_t>> children;
-//     int64_t node_level;
-// };
-
-// // Memory-mapped node for storage/reading
-// struct MMAPTrieNode {
-//     int64_t count;
-//     int64_t num_children;
-//     int64_t children_offset;
-//     int64_t node_level;
-// };
-
-
-
 struct RAMTrieNode {
-    int64_t count;
+    int32_t count;
     int64_t num_children;
     std::pair<int64_t, int64_t>* children;  // Raw array instead of vector
-    int64_t children_capacity;
-    int64_t node_level;
+    uint32_t children_capacity;
+    uint8_t node_level;
 };
 std::vector<RAMTrieNode> nodes;  // Our main container during construction
 
 // Memory mapped structure for final format
 struct MMAPTrieNode {
-    int64_t count;
-    int64_t num_children;
+    int32_t count;
+    uint16_t num_children;
     int64_t children_offset;
-    int64_t node_level;
-    int64_t value;  // Add this to store the value associated with this node
+    uint8_t node_level;
+    uint16_t value;  // Add this to store the value associated with this node
 };
 
 // For RAM-based nodes
@@ -105,6 +74,16 @@ void printTrieNode(const MMAPTrieNode* node) {
 }
 
 
+
+struct MemoryStats {
+    size_t total_bytes;           
+    size_t node_struct_bytes;     
+    size_t children_array_bytes;  
+    size_t wasted_bytes;         
+    size_t num_nodes;            
+    size_t num_empty_children;   
+    double avg_fill_ratio;       
+};
 
 struct InsertResult {
     py::list result;
@@ -188,7 +167,7 @@ private:
     }
 
     // For memory-mapped mode - keep original array version
-    int64_t find_child(std::pair<int64_t, int64_t>* children, int64_t num_children, int64_t value) {
+    int64_t find_child(std::pair<uint16_t, int64_t>* children, uint16_t num_children, uint16_t value) {
         // std::cout << "find_child searching for value " << value 
         //         << " among " << num_children << " children" << std::endl;
         
@@ -204,14 +183,21 @@ private:
     // Add this function to handle children array allocation/reallocation
     size_t allocate_children(RAMTrieNode* node, size_t needed_size) {
         if (node->children == nullptr) {
+
+            size_t initial_size;
             // First allocation
-            size_t initial_size = std::max(needed_size, size_t(8));  // Start with at least 8
+            if (node->node_level < 4){
+                initial_size = std::max(needed_size, size_t(8));  // Start with at least 8
+            } else {
+                initial_size = 1;
+            }
+            
             node->children = new std::pair<int64_t, int64_t>[initial_size];
             node->children_capacity = initial_size;
         }
         else if (node->num_children + needed_size > node->children_capacity) {
             // Need to grow
-            size_t new_capacity = node->children_capacity * 2;
+            size_t new_capacity = node->children_capacity + 5;
             auto new_children = new std::pair<int64_t, int64_t>[new_capacity];
             // Use copy instead of memmove for proper object copying
             for (int64_t i = 0; i < node->num_children; i++) {
@@ -257,13 +243,13 @@ private:
     }
 
     // Memory-mapped version of get_children
-    std::pair<int64_t, int64_t>* get_mmap_children(MMAPTrieNode* node) {
+    std::pair<uint16_t, int64_t>* get_mmap_children(MMAPTrieNode* node) {
         if (node->children_offset >= file_size) {
             std::cout << "ERROR in get_mmap_children: offset " << node->children_offset 
                     << " exceeds file_size " << file_size << std::endl;
             throw std::runtime_error("Invalid children offset");
         }
-        return reinterpret_cast<std::pair<int64_t, int64_t>*>(mapped_memory + node->children_offset);
+        return reinterpret_cast<std::pair<uint16_t, int64_t>*>(mapped_memory + node->children_offset);
     }
 
 
@@ -386,7 +372,7 @@ public:
         for (size_t i = 0; i < total_nodes; i++) {
             children_addresses[i] = current_offset;
             if (nodes[i].num_children > 0) {
-                current_offset += nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>);
+                current_offset += nodes[i].num_children * sizeof(std::pair<uint16_t, int64_t>);
             }
         }
 
@@ -423,27 +409,32 @@ public:
         for (size_t i = 0; i < total_nodes; i++) {
             MMAPTrieNode mmap_node{
                 nodes[i].count,
-                nodes[i].num_children,
+                static_cast<uint16_t>(nodes[i].num_children),
                 children_addresses[i],  // Point to where children array will be
-                nodes[i].node_level
+                static_cast<uint8_t>(nodes[i].node_level)
             };
             memcpy(mapped_memory + node_addresses[i], &mmap_node, sizeof(MMAPTrieNode));
         }
 
         for (size_t i = 0; i < total_nodes; i++) {
             if (nodes[i].num_children > 0) {
-                std::vector<std::pair<int64_t, int64_t>> child_pairs(nodes[i].num_children);
-                for (int64_t j = 0; j < nodes[i].num_children; j++) {
+                std::vector<std::pair<uint16_t, int64_t>> child_pairs(nodes[i].num_children);
+                for (uint16_t j = 0; j < nodes[i].num_children; j++) {
+
+                    // Validate vocab ID before compression
+                    // if (nodes[i].children[j].first > UINT16_MAX) {
+                    //     throw std::runtime_error("Vocab ID exceeds uint16_t range during serialization");
+                    // }
                     // Store both value and address
                     child_pairs[j] = {
-                        nodes[i].children[j].first,  // Original value
+                        static_cast<uint16_t>(nodes[i].children[j].first),  // Original value
                         node_addresses[nodes[i].children[j].second]  // Address where child is stored
                     };
                 }
                 // Write array of child pairs
                 memcpy(mapped_memory + children_addresses[i], 
                     child_pairs.data(), 
-                    nodes[i].num_children * sizeof(std::pair<int64_t, int64_t>));
+                    nodes[i].num_children * sizeof(std::pair<uint16_t, int64_t>));
             }
         }
 
@@ -678,11 +669,18 @@ public:
         auto accessor = tensor.accessor<int64_t, 2>();
 
         for (int64_t j = 0; j < accessor.size(1); j++) {
-            int64_t value = accessor[column][j];
+            // int64_t value = accessor[column][j];
             // std::cout << "\nLooking for value: " << value << std::endl;
 
+            int64_t tensor_value = accessor[column][j];
+            // Validate value range
+            // if (tensor_value > UINT16_MAX) {
+            //     throw std::runtime_error("Tensor value exceeds uint16_t range");
+            // }
+            uint16_t value = static_cast<uint16_t>(tensor_value);
+
             if (current->num_children > 0) {
-                std::pair<int64_t, int64_t>* children = get_mmap_children(current);
+                std::pair<uint16_t, int64_t>* children = get_mmap_children(current);
                 
                 // std::cout << "Current node has " << current->num_children << " children:" << std::endl;
                 // for (int64_t i = 0; i < current->num_children; i++) {
@@ -699,11 +697,11 @@ public:
                     
                     std::unordered_map<int64_t, double> distribution;
                     if (current->num_children > 0) {
-                        std::pair<int64_t, int64_t>* next_children = get_mmap_children(current);
+                        std::pair<uint16_t, int64_t>* next_children = get_mmap_children(current);
                         // std::cout << "Building distribution from " << current->num_children << " children:" << std::endl;
-                        for (int64_t k = 0; k < current->num_children; k++) {
+                        for (uint16_t k = 0; k < current->num_children; k++) {
                             MMAPTrieNode* child = get_mmap_node(next_children[k].second);
-                            distribution[next_children[k].first] = static_cast<double>(child->count);
+                            distribution[static_cast<int64_t>(next_children[k].first)] = static_cast<double>(child->count);
                             // std::cout << "Added to distribution: " << next_children[k].first 
                             //         << " -> " << child->count << std::endl;
                         }
@@ -800,6 +798,85 @@ public:
         return num_total_contexts.load();
     }
 
+
+    MemoryStats calculate_detailed_memory_usage() const {
+        MemoryStats stats = {0, 0, 0, 0, 0, 0, 0.0};
+        
+        if (!is_construction_mode) {
+            throw std::runtime_error("Memory stats only available in construction mode");
+        }
+        
+        // Base node structure memory
+        stats.num_nodes = nodes.size();
+        stats.node_struct_bytes = nodes.size() * sizeof(RAMTrieNode);
+        
+        double total_fill_ratio = 0.0;
+        int nodes_with_children = 0;
+        
+        // Analyze each node's children array
+        for (const auto& node : nodes) {
+            if (node.children_capacity > 0) {
+                // Memory allocated for children array
+                size_t array_bytes = node.children_capacity * sizeof(std::pair<int64_t, int64_t>);
+                stats.children_array_bytes += array_bytes;
+                
+                // Calculate wasted space
+                size_t used_bytes = node.num_children * sizeof(std::pair<int64_t, int64_t>);
+                stats.wasted_bytes += (array_bytes - used_bytes);
+                
+                if (node.num_children == 0) {
+                    stats.num_empty_children++;
+                }
+                
+                // Calculate fill ratio
+                if (node.children_capacity > 0) {
+                    total_fill_ratio += static_cast<double>(node.num_children) / node.children_capacity;
+                    nodes_with_children++;
+                }
+            }
+        }
+        
+        // Calculate total memory
+        stats.total_bytes = stats.node_struct_bytes + stats.children_array_bytes;
+        
+        // Calculate average fill ratio
+        if (nodes_with_children > 0) {
+            stats.avg_fill_ratio = total_fill_ratio / nodes_with_children;
+        }
+        
+        return stats;
+    }
+
+    py::dict get_memory_stats() const {
+        MemoryStats stats = calculate_detailed_memory_usage();
+        
+        py::dict result;
+        result["total_mb"] = stats.total_bytes / (1024.0 * 1024.0);
+        result["node_structs_mb"] = stats.node_struct_bytes / (1024.0 * 1024.0);
+        result["children_arrays_mb"] = stats.children_array_bytes / (1024.0 * 1024.0);
+        result["wasted_mb"] = stats.wasted_bytes / (1024.0 * 1024.0);
+        result["num_nodes"] = stats.num_nodes;
+        result["empty_children"] = stats.num_empty_children;
+        result["avg_fill_ratio"] = stats.avg_fill_ratio;
+        
+        return result;
+    }
+
+    void print_memory_stats() const {
+        MemoryStats stats = calculate_detailed_memory_usage();
+        
+        std::cout << "\n=== Memory Usage Statistics ===\n";
+        std::cout << "Size Of Nodes: " << nodes.size() << " \n";
+        std::cout << "Total Memory Used: " << stats.total_bytes / (1024.0 * 1024.0) << " MB\n";
+        std::cout << "Node Structures: " << stats.node_struct_bytes / (1024.0 * 1024.0) << " MB\n";
+        std::cout << "Children Arrays: " << stats.children_array_bytes / (1024.0 * 1024.0) << " MB\n";
+        std::cout << "Wasted Space: " << stats.wasted_bytes / (1024.0 * 1024.0) << " MB\n";
+        std::cout << "Number of Nodes: " << stats.num_nodes << "\n";
+        std::cout << "Nodes with Empty Children Arrays: " << stats.num_empty_children << "\n";
+        std::cout << "Average Children Array Fill Ratio: " << (stats.avg_fill_ratio * 100.0) << "%\n";
+        std::cout << "==============================\n";
+    }
+
 };
 
 
@@ -813,6 +890,9 @@ py::dict convert_to_python_dict(const std::unordered_map<std::vector<int64_t>, i
     return result;
 }
 
+
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<Trie_module_protV1>(m, "Trie_module_protV1")
         .def(py::init<const std::string&, size_t, int64_t>())
@@ -825,7 +905,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("get_num_total_contexts", &Trie_module_protV1::get_num_total_contexts)  // New method to access num_unique_contexts
         .def("load_metadata", &Trie_module_protV1::load_metadata)
         .def("save_metadata", &Trie_module_protV1::save_metadata)
-        .def("serialize_to_mmap", &Trie_module_protV1::serialize_to_mmap);
+        .def("serialize_to_mmap", &Trie_module_protV1::serialize_to_mmap)
+        .def("get_memory_stats", &Trie_module_protV1::get_memory_stats)
+        .def("print_memory_stats", &Trie_module_protV1::print_memory_stats);
         
 
     py::class_<InsertResult>(m, "InsertResult")

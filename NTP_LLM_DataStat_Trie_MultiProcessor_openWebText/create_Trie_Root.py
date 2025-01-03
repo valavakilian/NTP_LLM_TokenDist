@@ -317,7 +317,8 @@ if __name__ == "__main__":
     # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_TokenDist_WikiBig_multithreaded/outputs/mylogtext.txt', 'w') as file:
     #     file.write("Got in ? \n")
 
-    et_dir = '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin'  # Your saved dataset folder
+
+    dataset_dir = '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin'  # Your saved dataset folder
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
     # Example usage with stride

@@ -249,7 +249,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     else:
         print("File does not exist or forced to Trie recreation requested.")
         print(f"Trie is of size {Trie_predicted_size} GB")
-        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, Trie_predicted_size, args.context_length)
+        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 120, args.context_length)
 
 
 
@@ -301,6 +301,9 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
 
             del X
             # print("Inserted a batch")
+
+            if batches_seen % 1000 == 0 and batches_seen > 10:
+                context_tree_MT.print_memory_stats()
 
             if milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]:
                 
@@ -374,6 +377,19 @@ if __name__ == "__main__":
     # with open('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/outputs/mylogtext.txt', 'w') as file:
     #     file.write("Got in ? \n")
 
+    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%OpWT_Stride{args.stride}"
+    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Tries/"
+    folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
+    folder_Tries_path = save_Trie_folder + folder_name_Tries
+    bin_folder_path = folder_Tries_path + f"group{args.group}/"
+    
+    local_bin_folder_path = "./Trie_info/"
+    if not os.path.exists(local_bin_folder_path):
+        os.mkdir(local_bin_folder_path)
+    print(f"Directory exists: {os.path.exists(local_bin_folder_path)}")
+    bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
+    valid_indices = np.load(bin_folder_path + 'shuffled_indices_locations.npy')
+
     dataset_dir = '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin'  # Your saved dataset folder
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
@@ -385,6 +401,8 @@ if __name__ == "__main__":
         context_length=args.context_length,
         batch_size=args.batch_size,
         data_percentage=args.perc_stories,
+        token_pairs=bin_assigned_indices,
+        valid_indices = valid_indices,
         stride=args.stride,   
         is_root = False, 
         root_ctx_len = 2
@@ -401,18 +419,6 @@ if __name__ == "__main__":
     context_length = args.context_length
     batch_size = args.batch_size
     perc_stories = args.perc_stories
-
-    filename = f"voc{args.vocab_size}_ctxLen{args.context_length}_{args.perc_stories}%OpWT_Stride{args.stride}"
-    save_Trie_folder = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Tries/"
-    folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
-    folder_Tries_path = save_Trie_folder + folder_name_Tries
-    bin_folder_path = folder_Tries_path + f"group{args.group}/"
-
-    local_bin_folder_path = "./Trie_info/"
-    if not os.path.exists(local_bin_folder_path):
-        os.mkdir(local_bin_folder_path)
-    print(f"Directory exists: {os.path.exists(local_bin_folder_path)}")
-    bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
 
 
     # Step 4: Load and Tokenize the Wikitext-2 Dataset
