@@ -81,56 +81,6 @@ class TokenizedDataset(Dataset):
         return torch.from_numpy(np.array(x, dtype=np.int64))
     
     
-    
-    
-    # def analyze_window_startPairs(self, prefix_length=2):
-    #     """
-    #     Analysis with detailed progress tracking
-    #     """
-    #     total_windows = (len(self.data) - prefix_length - 1) // self.stride + 1
-        
-    #     # Use smaller chunks for better progress tracking
-    #     num_processes = min(cpu_count(), 8)
-    #     chunk_size = min(1000000, total_windows // (num_processes * 8))
-        
-    #     # Prepare chunks
-    #     chunks = []
-    #     for chunk_start in range(0, total_windows, chunk_size):
-    #         chunk_end = min(chunk_start + chunk_size, total_windows)
-    #         chunks.append((chunk_start, chunk_end, self.data.filename, self.stride))
-        
-    #     print(f"Starting analysis of {total_windows:,} windows...")
-    #     print(f"Using {num_processes} processes with chunk size: {chunk_size:,}")
-    #     print(f"Total chunks to process: {len(chunks)}")
-        
-    #     final_counts = Counter()
-    #     start_time = time.time()
-    #     processed_tokens = 0
-        
-    #     with Pool(processes=num_processes) as pool:
-    #         # Use tqdm for progress tracking
-    #         with tqdm(total=len(chunks), desc="Processing chunks") as pbar:
-    #             for chunk_counts in pool.imap(process_chunk, chunks):
-    #                 final_counts.update(chunk_counts)
-    #                 processed_tokens += chunk_size
-    #                 pbar.update(1)
-                    
-    #                 # Print periodic statistics
-    #                 if pbar.n % 100 == 0:
-    #                     elapsed = time.time() - start_time
-    #                     tokens_per_sec = processed_tokens / elapsed
-    #                     print(f"\nProcessing speed: {tokens_per_sec:,.0f} tokens/sec")
-    #                     print(f"Unique pairs found so far: {len(final_counts):,}")
-        
-    #     # Final statistics
-    #     total_time = time.time() - start_time
-    #     print(f"\nAnalysis complete!")
-    #     print(f"Total time: {total_time:.2f} seconds")
-    #     print(f"Average speed: {total_windows/total_time:,.0f} tokens/sec")
-    #     print(f"Total unique pairs found: {len(final_counts):,}")
-        
-    #     return dict(final_counts)
-    
     def analyze_window_startPairs(self, prefix_length=2):
         """
         Analyze token pairs and track their locations in the data
