@@ -186,10 +186,10 @@ private:
 
             size_t initial_size;
             // First allocation
-            if (node->node_level < 4){
-                initial_size = std::max(needed_size, size_t(8));  // Start with at least 8
-            } else {
+            if (node->node_level > 3){
                 initial_size = 1;
+            } else {
+                initial_size = std::max(needed_size, size_t(10));  // Start with at least 8
             }
             
             node->children = new std::pair<int64_t, int64_t>[initial_size];
@@ -197,7 +197,14 @@ private:
         }
         else if (node->num_children + needed_size > node->children_capacity) {
             // Need to grow
-            size_t new_capacity = node->children_capacity + 5;
+            size_t new_capacity;
+            if (node->node_level > 3){
+                new_capacity = node->children_capacity + 3;
+            } else {
+                new_capacity = node->children_capacity + 10;
+            }
+
+            // size_t new_capacity = node->children_capacity + 5;
             auto new_children = new std::pair<int64_t, int64_t>[new_capacity];
             // Use copy instead of memmove for proper object copying
             for (int64_t i = 0; i < node->num_children; i++) {

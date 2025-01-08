@@ -170,7 +170,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     memap_filename_MT = f"{save_tree_folder}TrieRoot_MT"
     
     num_examples = num_examples * args.batch_size
-    Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.root_ctx_len + 1) * 20 // (1024**3)), 6)
+    # Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.root_ctx_len + 1) * 20 // (1024**3)), 6)
+    Trie_predicted_size = 120
 
        
     exp_was_initiated = False
@@ -218,11 +219,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     # Step 6: Iterate through the DataLoader and print samples
     batches_seen = 0
 
-    # print("HEHEHEHEHEHEHEHEH")
-    
     for X in tqdm(dataloader):
 
-        # print("HEHEHEHEHEHEHEHEH")
         contexts_count += X.shape[0]
         batches_seen += 1
 
@@ -231,14 +229,8 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
             print("Context count " + str(contexts_count) + " is already processed.")
         else:
             
-            # start_time_insert = time.time()
-            # start_time_insert = timer()
-            # print(X[0,:])
             result = context_tree_MT.insert(X, False)
-            # Get the results and timing
-            # soft_labels = result.result  # This is your original return value
             execution_time_seconds = result.execution_time_ms / 1000.0
-            # insert_runtime += time.time() - start_time_insert
             insert_runtime_MT += execution_time_seconds
 
             del X
