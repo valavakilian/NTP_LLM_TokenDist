@@ -249,7 +249,7 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     else:
         print("File does not exist or forced to Trie recreation requested.")
         print(f"Trie is of size {Trie_predicted_size} GB")
-        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 120, args.context_length)
+        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, 160, args.context_length)
 
 
 
@@ -388,7 +388,11 @@ if __name__ == "__main__":
         os.mkdir(local_bin_folder_path)
     print(f"Directory exists: {os.path.exists(local_bin_folder_path)}")
     bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
-    valid_indices = np.load(bin_folder_path + 'shuffled_indices_locations.npy')
+    # valid_indices = np.load(bin_folder_path + 'shuffled_indices_locations.npy')
+    valid_indices = np.loadtxt(bin_folder_path + 'shuffled_indices_locations.txt', dtype=int)
+    # bin_assigned_indices = np.load('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Tries/voc50257_ctxLen32_100%OpWT_Stride1_NumBins100/group5/indices.npy')
+    # valid_indices = np.loadtxt('/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText/Tries/voc50257_ctxLen32_100%OpWT_Stride1_NumBins100/group5/shuffled_indices_locations.txt', dtype=int)
+    print(valid_indices[0:100])
 
     dataset_dir = '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin'  # Your saved dataset folder
 

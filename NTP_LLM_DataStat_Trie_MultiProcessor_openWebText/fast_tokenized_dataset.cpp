@@ -72,8 +72,7 @@ struct PairHash {
 
 class TokenizedDataset {
 private:
-    std::ifstream file;
-    size_t file_size;
+    std::vector<uint16_t> data;  // Store all tokens in memory
     size_t num_tokens;
     size_t context_length;
     size_t stride;
@@ -81,8 +80,7 @@ private:
     size_t root_ctx_len;
     std::vector<size_t> valid_indices;
     size_t vocab_size;
-    std::string filepath;
-    static constexpr size_t CHUNK_SIZE = 1024 * 1024;  // 1M tokens per chunk
+    static constexpr size_t CHUNK_SIZE = 1024 * 1024;
     std::unordered_map<std::pair<uint16_t, uint16_t>, size_t, PairHash> final_counts;
     size_t num_bins;
     std::vector<std::vector<py::tuple>> bins;
@@ -102,24 +100,42 @@ public:
         , stride(stride ? stride : context_length)
         , is_root(is_root)
         , root_ctx_len(root_ctx_len)
-        , filepath(data_path)
         , num_bins(num_bins)
-        , bins(num_bins)  // Initialize in constructor
-        , bin_sums(num_bins, 0)  // Initialize in constructor
+        , bins(num_bins)
+        , bin_sums(num_bins, 0)
     {
         std::cout << "\nInitializing TokenizedDataset...\n";
         
-        file.open(data_path, std::ios::binary);
+        // Read the entire file into memory
+        std::ifstream file(data_path, std::ios::binary);
         if (!file.is_open()) {
             throw std::runtime_error("Failed to open file: " + data_path);
         }
 
+        // Get file size
         file.seekg(0, std::ios::end);
-        file_size = file.tellg();
+        size_t file_size = file.tellg();
         file.seekg(0, std::ios::beg);
 
+        // Calculate number of tokens and resize data vector
         num_tokens = file_size / sizeof(uint16_t);
         num_tokens = static_cast<size_t>(num_tokens * (data_percentage / 100.0));
+        data.resize(num_tokens);
+
+        // Read all data at once
+        std::cout << "Loading data into memory...\n";
+        ProgressBar progress(num_tokens, "Loading tokens");
+        
+        const size_t batch_size = CHUNK_SIZE;
+        std::vector<uint16_t> buffer(batch_size);
+        
+        for (size_t pos = 0; pos < num_tokens; pos += batch_size) {
+            size_t tokens_to_read = std::min(batch_size, num_tokens - pos);
+            file.read(reinterpret_cast<char*>(buffer.data()), tokens_to_read * sizeof(uint16_t));
+            std::copy(buffer.begin(), buffer.begin() + tokens_to_read, data.begin() + pos);
+            progress.update(tokens_to_read);
+        }
+        progress.finish();
 
         if (!valid_indices.empty()) {
             std::cout << "Processing valid indices... ";
@@ -128,12 +144,8 @@ public:
                 [this](size_t idx) { return idx + this->context_length + 1 > this->num_tokens; });
             this->valid_indices.erase(it, this->valid_indices.end());
         }
-        
 
         calcVocabSize();
-
-        // std::vector<std::vector<py::tuple>> bins(num_bins);
-        // std::vector<size_t> bin_sums(num_bins, 0);
 
         std::cout << "\nDataset initialization complete:\n";
         std::cout << "Loaded " << num_tokens << " tokens\n";
@@ -141,7 +153,6 @@ public:
         std::cout << "Vocabulary size: " << vocab_size << "\n\n";
     }
 
-    // First modify analyze_window_startPairs to only return counts
     py::dict analyze_window_startPairs(size_t prefix_length = 2) {
         const int num_threads = omp_get_max_threads();
         std::cout << "Using " << num_threads << " threads\n";
@@ -152,38 +163,39 @@ public:
         std::vector<std::unordered_map<std::pair<uint16_t, uint16_t>, size_t, PairHash>> thread_counts(num_threads);
         
         ProgressBar progress(total_windows, "Analyzing windows");
+        std::atomic<size_t> progress_counter{0};  // Use atomic for thread-safe counting
         
         #pragma omp parallel num_threads(num_threads)
         {
             int thread_id = omp_get_thread_num();
-            size_t start_window = thread_id * windows_per_chunk;
-            size_t end_window = std::min(start_window + windows_per_chunk, total_windows);
+            size_t local_progress = 0;  // Track progress locally
             
-            std::vector<uint16_t> buffer(prefix_length);
-            std::ifstream local_file(filepath, std::ios::binary);
-            
-            for (size_t window = start_window; window < end_window; ++window) {
+            #pragma omp for schedule(dynamic, 1024)  // Add chunk size for better load balancing
+            for (size_t window = 0; window < total_windows; window++) {
                 size_t start_pos = window * stride;
                 if (start_pos + prefix_length <= num_tokens) {
-                    local_file.seekg(start_pos * sizeof(uint16_t));
-                    local_file.read(reinterpret_cast<char*>(buffer.data()), prefix_length * sizeof(uint16_t));
-                    
-                    auto token_pair = std::make_pair(buffer[0], buffer[1]);
+                    auto token_pair = std::make_pair(data[start_pos], data[start_pos + 1]);
                     thread_counts[thread_id][token_pair]++;
                 }
                 
-                #pragma omp critical
-                {
-                    progress.update();
+                local_progress++;
+                if (local_progress >= 10000) {  // Update progress less frequently
+                    progress_counter += local_progress;
+                    progress.update(local_progress);
+                    local_progress = 0;
                 }
+            }
+            
+            // Update any remaining progress
+            if (local_progress > 0) {
+                progress_counter += local_progress;
+                progress.update(local_progress);
             }
         }
         progress.finish();
 
         // Merge results
         std::cout << "Merging results from all threads...\n";
-        // final_counts;
-        
         for (int t = 0; t < num_threads; t++) {
             for (const auto& pair : thread_counts[t]) {
                 final_counts[pair.first] += pair.second;
@@ -201,7 +213,7 @@ public:
         return py_counts;
     }
 
-    
+
     py::tuple distribute_tuples() {
         std::cout << "\nStarting distribution of " << final_counts.size() << " tuples...\n";
         
@@ -276,16 +288,12 @@ public:
         return py::make_tuple(py_bins, py_sums);
     }
 
-
-
     void save_pair_locations(const std::string& output_dir) {
         const int num_threads = omp_get_max_threads();
         std::cout << "Using " << num_threads << " threads for location analysis\n";
 
-        // Create a map from token pairs to bin numbers for efficient lookup
+        // Create pair to bin mapping (same as before)
         std::unordered_map<std::pair<uint16_t, uint16_t>, size_t, PairHash> pair_to_bin;
-        
-        // Build the reverse mapping
         for (size_t bin_idx = 0; bin_idx < bins.size(); bin_idx++) {
             for (const auto& py_tuple : bins[bin_idx]) {
                 pair_to_bin[std::make_pair(
@@ -295,97 +303,92 @@ public:
             }
         }
 
-        // Create output files for each bin
-        std::unordered_map<size_t, std::ofstream> bin_files;
-        std::unordered_map<size_t, std::mutex> bin_mutexes;
+        // Create output files and their mutexes
+        std::vector<std::ofstream> bin_files(bins.size());
+        std::vector<std::mutex> bin_mutexes(bins.size());
         
         for (size_t bin_idx = 0; bin_idx < bins.size(); bin_idx++) {
             std::string filename = output_dir + "group" + std::to_string(bin_idx) + "/shuffled_indices_locations.txt";
-            bin_files[bin_idx].open(filename);
+            bin_files[bin_idx].open(filename, std::ios::out | std::ios::binary);
             if (!bin_files[bin_idx].is_open()) {
                 throw std::runtime_error("Failed to open output file: " + filename);
             }
         }
 
-        // Calculate total number of valid windows
-        size_t effective_length = is_root ? root_ctx_len : context_length;
-        size_t total_windows = (num_tokens - effective_length - 1) / stride + 1;
-        
-        // Use a large chunk size for better I/O performance
-        const size_t CHUNK_SIZE = 1024 * 1024 * 10;  // 10M tokens per chunk
-        std::vector<uint16_t> buffer(CHUNK_SIZE);
+        // Smaller buffer size to prevent memory issues
+        const size_t BUFFER_SIZE = 64 * 1024;  // 64KB buffer per thread per bin
+        std::vector<std::vector<std::string>> thread_buffers(num_threads, 
+            std::vector<std::string>(bins.size()));
+        std::vector<std::vector<size_t>> buffer_sizes(num_threads, 
+            std::vector<size_t>(bins.size(), 0));
 
+        size_t total_windows = (num_tokens - 1) / stride + 1;
         ProgressBar progress(total_windows, "Processing locations");
-
-        // Pre-allocate string streams for each thread to build output
-        std::vector<std::unordered_map<size_t, std::stringstream>> thread_outputs(num_threads);
+        std::atomic<size_t> progress_counter{0};
 
         #pragma omp parallel num_threads(num_threads)
         {
             int thread_id = omp_get_thread_num();
             size_t local_progress = 0;
-
-            #pragma omp for schedule(dynamic)
-            for (size_t chunk_start = 0; chunk_start < num_tokens; chunk_start += CHUNK_SIZE) {
-                // Read a large chunk of tokens
-                size_t tokens_to_read = std::min(CHUNK_SIZE, num_tokens - chunk_start);
+            char number_buffer[32];
+            
+            #pragma omp for schedule(dynamic, 1024)
+            for (size_t i = 0; i < num_tokens - 1; i += stride) {
+                auto token_pair = std::make_pair(data[i], data[i + 1]);
+                auto bin_it = pair_to_bin.find(token_pair);
                 
-                std::ifstream local_file(filepath, std::ios::binary);
-                local_file.seekg(chunk_start * sizeof(uint16_t));
-                local_file.read(reinterpret_cast<char*>(buffer.data()), tokens_to_read * sizeof(uint16_t));
-                local_file.close();
-
-                // Process all valid windows in this chunk
-                for (size_t i = 0; i < tokens_to_read - 1; i += stride) {
-                    size_t global_pos = chunk_start + i;
-                    if (global_pos + 1 >= num_tokens) continue;
-
-                    auto token_pair = std::make_pair(buffer[i], buffer[i + 1]);
-                    auto bin_it = pair_to_bin.find(token_pair);
+                if (bin_it != pair_to_bin.end()) {
+                    size_t bin_idx = bin_it->second;
+                    int len = snprintf(number_buffer, sizeof(number_buffer), "%zu\n", i);
                     
-                    if (bin_it != pair_to_bin.end()) {
-                        // Accumulate output in thread-local string stream
-                        thread_outputs[thread_id][bin_it->second] << global_pos << "\n";
+                    // Check if buffer needs to be flushed
+                    if (buffer_sizes[thread_id][bin_idx] + len > BUFFER_SIZE) {
+                        // Flush buffer to file
+                        std::lock_guard<std::mutex> lock(bin_mutexes[bin_idx]);
+                        bin_files[bin_idx].write(thread_buffers[thread_id][bin_idx].data(), 
+                                            thread_buffers[thread_id][bin_idx].size());
+                        thread_buffers[thread_id][bin_idx].clear();
+                        buffer_sizes[thread_id][bin_idx] = 0;
                     }
+                    
+                    thread_buffers[thread_id][bin_idx].append(number_buffer, len);
+                    buffer_sizes[thread_id][bin_idx] += len;
+                }
 
-                    local_progress++;
-                    if (local_progress >= 1000) {  // Update progress every 1000 windows
-                        #pragma omp critical
-                        {
-                            progress.update(local_progress);
-                        }
-                        local_progress = 0;
-                    }
+                local_progress++;
+                if (local_progress >= 10000) {
+                    progress_counter += local_progress;
+                    progress.update(local_progress);
+                    local_progress = 0;
                 }
             }
 
-            // Final progress update for this thread
-            if (local_progress > 0) {
-                #pragma omp critical
-                {
-                    progress.update(local_progress);
+            // Flush remaining buffers
+            for (size_t bin_idx = 0; bin_idx < bins.size(); bin_idx++) {
+                if (buffer_sizes[thread_id][bin_idx] > 0) {
+                    std::lock_guard<std::mutex> lock(bin_mutexes[bin_idx]);
+                    bin_files[bin_idx].write(thread_buffers[thread_id][bin_idx].data(),
+                                        thread_buffers[thread_id][bin_idx].size());
                 }
+            }
+
+            if (local_progress > 0) {
+                progress_counter += local_progress;
+                progress.update(local_progress);
             }
         }
         progress.finish();
 
-        // Write accumulated outputs to files
-        for (int t = 0; t < num_threads; t++) {
-            for (const auto& [bin_idx, stream] : thread_outputs[t]) {
-                std::lock_guard<std::mutex> lock(bin_mutexes[bin_idx]);
-                bin_files[bin_idx] << stream.str();
-            }
-        }
-
         // Close all files
-        for (auto& file_pair : bin_files) {
-            if (file_pair.second.is_open()) {
-                file_pair.second.close();
+        for (auto& file : bin_files) {
+            if (file.is_open()) {
+                file.close();
             }
         }
     }
 
-    // Rest of the class remains the same...
+
+
     size_t __len__() const {
         return getNumWindows();
     }
@@ -401,8 +404,10 @@ public:
         size_t window_size = is_root ? root_ctx_len + 1 : context_length + 1;
         std::vector<int64_t> window(window_size);
         
-        file.seekg(start_idx * sizeof(uint16_t));
-        file.read(reinterpret_cast<char*>(window.data()), window_size * sizeof(uint16_t));
+        // Direct memory access instead of file reading
+        std::copy(data.begin() + start_idx, 
+                 data.begin() + start_idx + window_size,
+                 window.begin());
 
         return torch::tensor(window);
     }
@@ -420,31 +425,17 @@ public:
     }
 
 private:
-    
-
     void calcVocabSize() {
         vocab_size = 0;
-        std::vector<uint16_t> buffer(8192);
+        ProgressBar progress(num_tokens, "Calculating vocab size");
         
-        size_t total_chunks = (file_size + buffer.size() * sizeof(uint16_t) - 1) / (buffer.size() * sizeof(uint16_t));
-        ProgressBar progress(total_chunks, "Calculating vocab size");
-        
-        for (size_t pos = 0; pos < file_size; pos += buffer.size() * sizeof(uint16_t)) {
-            size_t bytes_to_read = std::min(buffer.size() * sizeof(uint16_t), file_size - pos);
-            file.seekg(pos);
-            file.read(reinterpret_cast<char*>(buffer.data()), bytes_to_read);
-            
-            size_t tokens_read = bytes_to_read / sizeof(uint16_t);
-            for (size_t i = 0; i < tokens_read; ++i) {
-                vocab_size = std::max(vocab_size, static_cast<size_t>(buffer[i]));
-            }
-            
+        for (size_t i = 0; i < num_tokens; ++i) {
+            vocab_size = std::max(vocab_size, static_cast<size_t>(data[i]));
             progress.update();
         }
         progress.finish();
         
         vocab_size++;
-        file.seekg(0);
     }
 };
 

@@ -271,6 +271,8 @@ public:
 
         // Reserve space based on expected number of nodes
         size_t expected_nodes = initial_size_gb * 1024 * 1024 * 1024 / sizeof(RAMTrieNode);
+        DEBUG_PRINT("WE ARE HERE, expected_nodes: " << expected_nodes);
+        
         nodes.reserve(expected_nodes);  // Pre-allocate space
         
         // Start with root node

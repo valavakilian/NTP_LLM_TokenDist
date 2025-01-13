@@ -68,11 +68,14 @@ from torch.optim import SGD
 
 
 
-from OpenWebText_loader_memap_sharded import *
+# from OpenWebText_loader_memap_sharded import *
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
 
 from timeit import default_timer as timer
+
+
+from fast_tokenized_dataset import TokenizedDataset, create_dataloader
 
 
 
@@ -153,6 +156,8 @@ def generate_equal_spaced_points(num_examples, num_points):
 
 def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_examples):
 
+    print("VALA WE ARE HERE")
+
     milestones = generate_equal_spaced_points(num_examples, num_milestones)[1:] # exclude zero
     print("milestones are : " + str(milestones))
 
@@ -223,18 +228,19 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
 
         contexts_count += X.shape[0]
         batches_seen += 1
-
+        
         if contexts_count <= up_to_ctx_count_processed: 
             del X
             print("Context count " + str(contexts_count) + " is already processed.")
         else:
             
+            print(X.shape)
             result = context_tree_MT.insert(X, False)
             execution_time_seconds = result.execution_time_ms / 1000.0
             insert_runtime_MT += execution_time_seconds
 
             del X
-            # print("Inserted a batch")
+            print("Inserted a batch")
             
 
             if milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]:
@@ -316,6 +322,15 @@ if __name__ == "__main__":
     # Example usage with stride
     print("_" * 100)
     print("Creating dataloader ... ")
+    # dataloader, vocab_size = create_dataloader(
+    #     '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin',
+    #     context_length=args.context_length,
+    #     batch_size=args.batch_size,
+    #     data_percentage=args.perc_stories,
+    #     stride=args.stride,   
+    #     is_root = True, 
+    #     root_ctx_len = 2
+    # )
     dataloader, vocab_size = create_dataloader(
         '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin',
         context_length=args.context_length,
@@ -323,7 +338,8 @@ if __name__ == "__main__":
         data_percentage=args.perc_stories,
         stride=args.stride,   
         is_root = True, 
-        root_ctx_len = 2
+        root_ctx_len = 2,
+        num_bins = args.num_bins
     )
     print("Complete!")
     print("_" * 100)

@@ -37,8 +37,9 @@ import mmap
 import hashlib
 
 # import trie_module_memap
-import trie_module_protV1_lib_multithreaded
+# import trie_module_protV1_lib_multithreaded
 # import trie_module_protV1_lib
+# import root_context_dict
 
 import numpy as np
 from datasets import load_from_disk
@@ -68,11 +69,15 @@ from torch.optim import SGD
 
 
 
-from OpenWebText_loader_memap_sharded import *
+# from OpenWebText_loader_memap_sharded import *
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
 
 from timeit import default_timer as timer
+
+
+from fast_tokenized_dataset import TokenizedDataset, create_dataloader
+from root_context_dict import DistributionManager
 
 
 
@@ -183,14 +188,17 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
     # input()
     print(memap_filename_MT)
 
-    if os.path.exists(memap_filename_MT + ".bin") and args.LoadTrieFromFile:
-        print("Trie fiel exists! Loading from file.")
-        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT)
-        return context_tree_MT
-    else:
-        print("File does not exist or forced to Trie recreation requested.")
-        print(f"Trie is of size {Trie_predicted_size} GB")
-        context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, Trie_predicted_size, args.root_ctx_len)
+    # if os.path.exists(memap_filename_MT + ".bin") and args.LoadTrieFromFile:
+    #     print("Trie fiel exists! Loading from file.")
+    #     context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT)
+    #     return context_tree_MT
+    # else:
+    #     print("File does not exist or forced to Trie recreation requested.")
+    #     print(f"Trie is of size {Trie_predicted_size} GB")
+    #     context_tree_MT = trie_module_protV1_lib_multithreaded.Trie_module_protV1(memap_filename_MT, Trie_predicted_size, args.root_ctx_len)
+    # context_tree_MT = TokenDistributionCounter(args.root_ctx_len)
+    context_tree_MT =  DistributionManager(context_length=args.root_ctx_len, num_threads=40)
+
 
 
 
@@ -229,32 +237,33 @@ def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_e
             print("Context count " + str(contexts_count) + " is already processed.")
         else:
             
-            result = context_tree_MT.insert(X, False)
-            execution_time_seconds = result.execution_time_ms / 1000.0
-            insert_runtime_MT += execution_time_seconds
+            # print(X.shape)
+            result = context_tree_MT.process_batch(X)
+            # execution_time_seconds = result.execution_time_ms / 1000.0
+            # insert_runtime_MT += execution_time_seconds
 
             del X
             # print("Inserted a batch")
             
 
-            if milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]:
+            # if milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]:
                 
-                num_ctx_seen = milestones[milestone_index]
+            #     num_ctx_seen = milestones[milestone_index]
 
-                data_log_MT["insert_calc_time"][contexts_count] = insert_runtime_MT                
-                print(f"Current MT Trie memory usage: {context_tree_MT.get_memory_usage()//(1024)**3} GB")
+            #     data_log_MT["insert_calc_time"][contexts_count] = insert_runtime_MT                
+            #     print(f"Current MT Trie memory usage: {context_tree_MT.get_memory_usage()//(1024)**3} GB")
                 
-                print(f"Inserting MT trie took: {data_log_MT['insert_calc_time'][contexts_count]} seconds.")
-                print("_"*30)
+            #     print(f"Inserting MT trie took: {data_log_MT['insert_calc_time'][contexts_count]} seconds.")
+            #     print("_"*30)
                 
-                with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
-                    pickle.dump(data_log_MT, pickle_file)
+            #     with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
+            #         pickle.dump(data_log_MT, pickle_file)
                 
 
-                milestone_index += 1
-                insert_runtime_MT = 0
+            #     milestone_index += 1
+            #     insert_runtime_MT = 0
         
-                context_tree_MT.save_metadata()
+            #     # context_tree_MT.save_metadata()
     
     
     return context_tree_MT
@@ -316,6 +325,15 @@ if __name__ == "__main__":
     # Example usage with stride
     print("_" * 100)
     print("Creating dataloader ... ")
+    # dataloader, vocab_size = create_dataloader(
+    #     '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin',
+    #     context_length=args.context_length,
+    #     batch_size=args.batch_size,
+    #     data_percentage=args.perc_stories,
+    #     stride=args.stride,   
+    #     is_root = True, 
+    #     root_ctx_len = 2
+    # )
     dataloader, vocab_size = create_dataloader(
         '/arc/project/st-cthrampo-1/vala/openwebtext_karpathy/nanoGPT/data/openwebtext/train.bin',
         context_length=args.context_length,
@@ -323,7 +341,8 @@ if __name__ == "__main__":
         data_percentage=args.perc_stories,
         stride=args.stride,   
         is_root = True, 
-        root_ctx_len = 2
+        root_ctx_len = 2,
+        num_bins = args.num_bins
     )
     print("Complete!")
     print("_" * 100)
@@ -364,6 +383,17 @@ if __name__ == "__main__":
     num_milestones = 100    
     context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)
     print("Tree loading/contruction complete")
+
+
+    print("Merging the Trie")
+    merged_counter = context_tree.merge_and_reset()
+    print("Save complete.")
+
+    print("Saving the Trie")
+    save_tree_folder =  bin_folder_path + "context_trees_memap_cpp/"
+    memap_filename_MT = f"{save_tree_folder}TrieRoot_MT.bin"
+    context_tree.save_to_file(memap_filename_MT)
+    print("Save complete.")
 
 
 
