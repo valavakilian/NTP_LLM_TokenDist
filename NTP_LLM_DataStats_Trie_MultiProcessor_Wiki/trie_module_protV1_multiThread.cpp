@@ -109,8 +109,8 @@ public:
     }
 
     T& operator[](size_t index) {
-        // DEBUG_PRINT("Operator. size is " << size << " .");
-        // DEBUG_PRINT("Operator. index is " << index << " .");
+        DEBUG_PRINT("Operator. size is " << size << " .");
+        DEBUG_PRINT("Operator. index is " << index << " .");
         if (index >= size) {
             throw std::out_of_range("Index out of bounds");
         }
@@ -195,7 +195,7 @@ private:
     std::map<int64_t, double> supSize_array_level;
     std::map<int64_t, double> uniformity_array_level;
     
-    const size_t array_size = 1000000000; // Size of the array
+    const size_t array_size = 10000000; // Size of the array
     // std::vector<double> countLog_array;
     // std::vector<int> ctxLen_array;
     // std::vector<int64_t> ctxCount_array;
@@ -204,7 +204,7 @@ private:
     MemMapArray<int> ctxCount_array;
     MemMapArray<int> supSize_array;
                                        
-    const size_t size_logcalc_memory = 1500000000;  // 1 billion integers (~4 GB)
+    const size_t size_logcalc_memory = 15000000;  // 1 billion integers (~4 GB)
     std::vector<double> logcalc_memory_insert;
     std::vector<double> logcalc_memory_entropy;
 
@@ -603,7 +603,11 @@ public:
         int64_t current_level = 0;
         size_t current_offset = 0;
 
+        std::cout << "Inside Insert" << std::endl;
+
         for (int64_t j = 0; j < accessor.size(1); j++) {
+
+            std::cout << "For loop index:" << j << std::endl;
             int64_t value = accessor[column][j];
             
             TrieNode* current = get_node(current_offset);
@@ -621,7 +625,10 @@ public:
                 child_index = find_child(children, current->num_children, value);
             }
 
+            std::cout << "child_index:" << child_index << std::endl;
+
             if (child_index == -1) {
+                std::cout << "Child was not found, current->node_index:" << current->node_index << std::endl;
                 // Create new node (this is already thread-safe due to atomic operations)
                 size_t new_node_offset = allocate_node(current->node_level);
                 TrieNode* new_node = get_node(new_node_offset);
@@ -631,6 +638,8 @@ public:
                 new_node->num_children = 0;
                 new_node->children_offset = 0;
                 new_node->node_level = current_level + 1;
+
+                std::cout << "child_index:" << child_index << std::endl;
 
                 // if (new_node->node_level <= context_length) {
                 //     num_total_contexts_per_level[new_node->node_level]++;
@@ -646,10 +655,12 @@ public:
                     current->children_offset = new_children_offset;
                 }
 
+                std::cout << "We are inserting a child, current->node_index:" << current->node_index << std::endl;
                 insert_child(current, value, new_node_offset);
                 current_offset = new_node_offset;
                 supSize_array[current->node_index] += 1;
             } else {
+                std::cout << "child_index:" << child_index << std::endl;
                 current_offset = get_children(current)[child_index].second;
             }
 
@@ -657,6 +668,8 @@ public:
             TrieNode* next_node = get_node(current_offset);
             int64_t c_t_temp = next_node->count;
             
+
+            std::cout << "We got to updates, current->node_index:" << current->node_index << std::endl;
             if (current->node_index > 0 && c_t_temp > 0 && current->node_level <= context_length) {
                 double log_value;
                 {
