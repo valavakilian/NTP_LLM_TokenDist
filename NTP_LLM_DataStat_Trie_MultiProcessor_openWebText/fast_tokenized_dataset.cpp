@@ -13,6 +13,8 @@
 #include <chrono>
 #include <omp.h>
 #include <mutex>
+#include <filesystem>
+
 
 namespace py = pybind11;
 using namespace py::literals;
@@ -85,6 +87,10 @@ private:
     size_t num_bins;
     std::vector<std::vector<py::tuple>> bins;
     std::vector<size_t> bin_sums;
+
+    std::unordered_map<uint16_t, std::unordered_map<uint16_t, size_t>> single_token_transitions;
+    std::unordered_map<std::pair<uint16_t, uint16_t>, std::unordered_map<uint16_t, size_t>, PairHash> pair_token_transitions;
+
 
 public:
     TokenizedDataset(const std::string& data_path, 
@@ -424,6 +430,438 @@ public:
         return vocab_size;
     }
 
+
+    void save_transitions_to_file(const std::string& output_dir) {
+        // Create directory if it doesn't exist
+        std::filesystem::create_directories(output_dir);
+        
+        // Save single token transitions
+        {
+            std::ofstream single_file(output_dir + "/single_transitions.bin", std::ios::binary);
+            if (!single_file) throw std::runtime_error("Cannot open single transitions file for writing");
+            
+            // Write number of tokens
+            size_t num_tokens = single_token_transitions.size();
+            single_file.write(reinterpret_cast<const char*>(&num_tokens), sizeof(num_tokens));
+            
+            // Write each token's transitions
+            for (const auto& [token, transitions] : single_token_transitions) {
+                // Write the token
+                single_file.write(reinterpret_cast<const char*>(&token), sizeof(token));
+                
+                // Write number of transitions
+                size_t num_transitions = transitions.size();
+                single_file.write(reinterpret_cast<const char*>(&num_transitions), sizeof(num_transitions));
+                
+                // Write each transition
+                for (const auto& [next_token, count] : transitions) {
+                    single_file.write(reinterpret_cast<const char*>(&next_token), sizeof(next_token));
+                    single_file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+                }
+            }
+        }
+        
+        // Save pair transitions
+        {
+            std::ofstream pair_file(output_dir + "/pair_transitions.bin", std::ios::binary);
+            if (!pair_file) throw std::runtime_error("Cannot open pair transitions file for writing");
+            
+            // Write number of pairs
+            size_t num_pairs = pair_token_transitions.size();
+            pair_file.write(reinterpret_cast<const char*>(&num_pairs), sizeof(num_pairs));
+            
+            // Write each pair's transitions
+            for (const auto& [token_pair, transitions] : pair_token_transitions) {
+                // Write the token pair
+                pair_file.write(reinterpret_cast<const char*>(&token_pair.first), sizeof(token_pair.first));
+                pair_file.write(reinterpret_cast<const char*>(&token_pair.second), sizeof(token_pair.second));
+                
+                // Write number of transitions
+                size_t num_transitions = transitions.size();
+                pair_file.write(reinterpret_cast<const char*>(&num_transitions), sizeof(num_transitions));
+                
+                // Write each transition
+                for (const auto& [next_token, count] : transitions) {
+                    pair_file.write(reinterpret_cast<const char*>(&next_token), sizeof(next_token));
+                    pair_file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+                }
+            }
+        }
+        
+        std::cout << "Transitions saved to " << output_dir << std::endl;
+    }
+
+    void load_transitions_from_file(const std::string& input_dir) {
+        // Clear existing transitions
+        single_token_transitions.clear();
+        pair_token_transitions.clear();
+        
+        // Load single token transitions
+        {
+            std::ifstream single_file(input_dir + "/single_transitions.bin", std::ios::binary);
+            if (!single_file) throw std::runtime_error("Cannot open single transitions file for reading");
+            
+            // Read number of tokens
+            size_t num_tokens;
+            single_file.read(reinterpret_cast<char*>(&num_tokens), sizeof(num_tokens));
+            
+            // Read each token's transitions
+            for (size_t i = 0; i < num_tokens; i++) {
+                uint16_t token;
+                single_file.read(reinterpret_cast<char*>(&token), sizeof(token));
+                
+                size_t num_transitions;
+                single_file.read(reinterpret_cast<char*>(&num_transitions), sizeof(num_transitions));
+                
+                auto& transitions = single_token_transitions[token];
+                for (size_t j = 0; j < num_transitions; j++) {
+                    uint16_t next_token;
+                    size_t count;
+                    single_file.read(reinterpret_cast<char*>(&next_token), sizeof(next_token));
+                    single_file.read(reinterpret_cast<char*>(&count), sizeof(count));
+                    transitions[next_token] = count;
+                }
+            }
+        }
+        
+        // Load pair transitions
+        {
+            std::ifstream pair_file(input_dir + "/pair_transitions.bin", std::ios::binary);
+            if (!pair_file) throw std::runtime_error("Cannot open pair transitions file for reading");
+            
+            // Read number of pairs
+            size_t num_pairs;
+            pair_file.read(reinterpret_cast<char*>(&num_pairs), sizeof(num_pairs));
+            
+            // Read each pair's transitions
+            for (size_t i = 0; i < num_pairs; i++) {
+                uint16_t first_token, second_token;
+                pair_file.read(reinterpret_cast<char*>(&first_token), sizeof(first_token));
+                pair_file.read(reinterpret_cast<char*>(&second_token), sizeof(second_token));
+                
+                size_t num_transitions;
+                pair_file.read(reinterpret_cast<char*>(&num_transitions), sizeof(num_transitions));
+                
+                auto& transitions = pair_token_transitions[std::make_pair(first_token, second_token)];
+                for (size_t j = 0; j < num_transitions; j++) {
+                    uint16_t next_token;
+                    size_t count;
+                    pair_file.read(reinterpret_cast<char*>(&next_token), sizeof(next_token));
+                    pair_file.read(reinterpret_cast<char*>(&count), sizeof(count));
+                    transitions[next_token] = count;
+                }
+            }
+        }
+        
+        std::cout << "Transitions loaded from " << input_dir << std::endl;
+        std::cout << "Loaded " << single_token_transitions.size() << " single token transitions" << std::endl;
+        std::cout << "Loaded " << pair_token_transitions.size() << " pair transitions" << std::endl;
+    }
+
+
+    // py::dict analyze_token_transitions(const std::string& save_dir = "", bool read_from_file = false) {
+    //     if (read_from_file) {
+    //         if (save_dir.empty()) {
+    //             throw std::runtime_error("save_dir must be provided when read_from_file is true");
+    //         }
+    //         load_transitions_from_file(save_dir);
+    //     } else {
+    //         std::cout << "Starting token transition analysis...\n";
+            
+    //         single_token_transitions.clear();
+    //         pair_token_transitions.clear();
+            
+    //         ProgressBar progress(num_tokens - 2, "Analyzing transitions");
+            
+    //         // Process tokens sequentially
+    //         for (size_t i = 0; i < num_tokens - 2; i++) {
+    //             uint16_t current_token = data[i];
+    //             uint16_t next_token = data[i + 1];
+    //             uint16_t next_next_token = data[i + 2];
+                
+    //             // Increment count for single token transition
+    //             single_token_transitions[current_token][next_token]++;
+                
+    //             // Increment count for token pair transition
+    //             pair_token_transitions[std::make_pair(current_token, next_token)][next_next_token]++;
+                
+    //             progress.update();
+    //         }
+    //         progress.finish();
+            
+    //         // Save to file if directory is provided and we're not reading from file
+    //         if (!save_dir.empty()) {
+    //             save_transitions_to_file(save_dir);
+    //         }
+    //     }
+
+    //     // Convert to Python dictionary
+    //     py::dict result;
+        
+    //     // Convert single token transitions
+    //     std::cout << "Converting single token transitions...\n";
+    //     for (const auto& [token, transitions] : single_token_transitions) {
+    //         // Create a dict for each token's transitions
+    //         py::dict token_transitions;
+    //         for (const auto& [next_token, count] : transitions) {
+    //             token_transitions[py::cast(next_token)] = count;
+    //         }
+    //         result[py::cast(token)] = token_transitions;
+    //     }
+        
+    //     // Convert pair transitions
+    //     std::cout << "Converting pair transitions...\n";
+    //     for (const auto& [token_pair, transitions] : pair_token_transitions) {
+    //         py::tuple key = py::make_tuple(token_pair.first, token_pair.second);
+    //         py::dict pair_transitions;
+    //         for (const auto& [next_token, count] : transitions) {
+    //             pair_transitions[py::cast(next_token)] = count;
+    //         }
+    //         result[key] = pair_transitions;
+    //     }
+        
+    //     std::cout << "Analysis complete.\n";
+    //     std::cout << "Found " << single_token_transitions.size() << " unique single tokens\n";
+    //     std::cout << "Found " << pair_token_transitions.size() << " unique token pairs\n";
+        
+    //     return result;
+    // }
+
+    // py::dict analyze_token_transitions(const std::string& save_dir = "", bool read_from_file = false) {
+    //     if (read_from_file) {
+    //         if (save_dir.empty()) {
+    //             throw std::runtime_error("save_dir must be provided when read_from_file is true");
+    //         }
+    //         load_transitions_from_file(save_dir);
+    //     } else {
+    //         std::cout << "Starting token transition analysis...\n";
+            
+    //         // const int num_threads = omp_get_max_threads() / 2;
+    //         const int num_threads = 4;
+    //         std::cout << "Using " << num_threads << " threads\n";
+            
+    //         // Create thread-local maps
+    //         std::vector<std::unordered_map<uint16_t, std::unordered_map<uint16_t, size_t>>> thread_single_transitions(num_threads);
+    //         std::vector<std::unordered_map<std::pair<uint16_t, uint16_t>, std::unordered_map<uint16_t, size_t>, PairHash>> thread_pair_transitions(num_threads);
+            
+    //         // Process chunks in parallel
+    //         size_t total_tokens = num_tokens - 2;
+    //         ProgressBar progress(total_tokens, "Analyzing transitions");
+    //         std::atomic<size_t> progress_counter{0};
+            
+    //         #pragma omp parallel num_threads(num_threads)
+    //         {
+    //             int thread_id = omp_get_thread_num();
+    //             size_t local_progress = 0;
+                
+    //             #pragma omp for schedule(dynamic, 1024)
+    //             for (size_t i = 0; i < total_tokens; i++) {
+    //                 uint16_t current_token = data[i];
+    //                 uint16_t next_token = data[i + 1];
+    //                 uint16_t next_next_token = data[i + 2];
+                    
+    //                 // Update thread-local maps
+    //                 thread_single_transitions[thread_id][current_token][next_token]++;
+    //                 thread_pair_transitions[thread_id][std::make_pair(current_token, next_token)][next_next_token]++;
+                    
+    //                 local_progress++;
+    //                 if (local_progress >= 10000) {
+    //                     progress_counter += local_progress;
+    //                     progress.update(local_progress);
+    //                     local_progress = 0;
+    //                 }
+    //             }
+                
+    //             if (local_progress > 0) {
+    //                 progress_counter += local_progress;
+    //                 progress.update(local_progress);
+    //             }
+    //         }
+    //         progress.finish();
+            
+    //         // Merge results
+    //         std::cout << "Merging thread results...\n";
+    //         single_token_transitions.clear();
+    //         pair_token_transitions.clear();
+            
+    //         for (int t = 0; t < num_threads; t++) {
+    //             for (const auto& [token, transitions] : thread_single_transitions[t]) {
+    //                 auto& global_transitions = single_token_transitions[token];
+    //                 for (const auto& [next_token, count] : transitions) {
+    //                     global_transitions[next_token] += count;
+    //                 }
+    //             }
+                
+    //             for (const auto& [token_pair, transitions] : thread_pair_transitions[t]) {
+    //                 auto& global_transitions = pair_token_transitions[token_pair];
+    //                 for (const auto& [next_token, count] : transitions) {
+    //                     global_transitions[next_token] += count;
+    //                 }
+    //             }
+    //         }
+            
+    //         // Save to file if directory is provided and we're not reading from file
+    //         if (!save_dir.empty()) {
+    //             save_transitions_to_file(save_dir);
+    //         }
+    //     }
+        
+    //     // Convert to Python dictionary
+    //     py::dict result;
+        
+    //     // Convert single token transitions
+    //     std::cout << "Converting single token transitions...\n";
+    //     for (const auto& [token, transitions] : single_token_transitions) {
+    //         py::dict token_transitions;
+    //         for (const auto& [next_token, count] : transitions) {
+    //             token_transitions[py::cast(next_token)] = count;
+    //         }
+    //         result[py::cast(token)] = token_transitions;
+    //     }
+        
+    //     // Convert pair transitions
+    //     std::cout << "Converting pair transitions...\n";
+    //     for (const auto& [token_pair, transitions] : pair_token_transitions) {
+    //         py::tuple key = py::make_tuple(token_pair.first, token_pair.second);
+    //         py::dict pair_transitions;
+    //         for (const auto& [next_token, count] : transitions) {
+    //             pair_transitions[py::cast(next_token)] = count;
+    //         }
+    //         result[key] = pair_transitions;
+    //     }
+        
+    //     std::cout << "Analysis complete.\n";
+    //     std::cout << "Found " << single_token_transitions.size() << " unique single tokens\n";
+    //     std::cout << "Found " << pair_token_transitions.size() << " unique token pairs\n";
+        
+    //     return result;
+    // }
+
+    py::dict analyze_token_transitions(const std::string& save_dir = "", bool read_from_file = false) {
+        if (read_from_file) {
+            if (save_dir.empty()) {
+                throw std::runtime_error("save_dir must be provided when read_from_file is true");
+            }
+            load_transitions_from_file(save_dir);
+        } else {
+            std::cout << "Starting token transition analysis...\n";
+            
+            // Limit number of threads to reduce memory overhead
+            const int max_threads = 4;  // Adjust based on your system's memory
+            const int num_threads = std::min(max_threads, omp_get_max_threads());
+            std::cout << "Using " << num_threads << " threads\n";
+            
+            single_token_transitions.clear();
+            pair_token_transitions.clear();
+            
+            // Process in batches to manage memory
+            const size_t batch_size = 10000000;  // Process 10M tokens at a time
+            const size_t total_tokens = num_tokens - 2;
+            const size_t num_batches = (total_tokens + batch_size - 1) / batch_size;
+            
+            ProgressBar progress(total_tokens, "Analyzing transitions");
+            std::atomic<size_t> progress_counter{0};
+            
+            for (size_t batch = 0; batch < num_batches; batch++) {
+                const size_t start_idx = batch * batch_size;
+                const size_t end_idx = std::min(start_idx + batch_size, total_tokens);
+                
+                // Thread-local maps for this batch
+                std::vector<std::unordered_map<uint16_t, std::unordered_map<uint16_t, size_t>>> thread_single_transitions(num_threads);
+                std::vector<std::unordered_map<std::pair<uint16_t, uint16_t>, std::unordered_map<uint16_t, size_t>, PairHash>> thread_pair_transitions(num_threads);
+                
+                #pragma omp parallel num_threads(num_threads)
+                {
+                    int thread_id = omp_get_thread_num();
+                    size_t local_progress = 0;
+                    
+                    #pragma omp for schedule(dynamic, 1024)
+                    for (size_t i = start_idx; i < end_idx; i++) {
+                        uint16_t current_token = data[i];
+                        uint16_t next_token = data[i + 1];
+                        uint16_t next_next_token = data[i + 2];
+                        
+                        // Update thread-local maps
+                        thread_single_transitions[thread_id][current_token][next_token]++;
+                        thread_pair_transitions[thread_id][std::make_pair(current_token, next_token)][next_next_token]++;
+                        
+                        local_progress++;
+                        if (local_progress >= 10000) {
+                            progress_counter += local_progress;
+                            progress.update(local_progress);
+                            local_progress = 0;
+                        }
+                    }
+                    
+                    if (local_progress > 0) {
+                        progress_counter += local_progress;
+                        progress.update(local_progress);
+                    }
+                }
+                
+                // Merge batch results into global maps
+                std::cout << "\nMerging batch " << (batch + 1) << "/" << num_batches << "...\n";
+                for (int t = 0; t < num_threads; t++) {
+                    for (const auto& [token, transitions] : thread_single_transitions[t]) {
+                        auto& global_transitions = single_token_transitions[token];
+                        for (const auto& [next_token, count] : transitions) {
+                            global_transitions[next_token] += count;
+                        }
+                    }
+                    
+                    for (const auto& [token_pair, transitions] : thread_pair_transitions[t]) {
+                        auto& global_transitions = pair_token_transitions[token_pair];
+                        for (const auto& [next_token, count] : transitions) {
+                            global_transitions[next_token] += count;
+                        }
+                    }
+                }
+                
+                // Clear thread-local maps after merging
+                thread_single_transitions.clear();
+                thread_pair_transitions.clear();
+            }
+            
+            progress.finish();
+            
+            // Save to file if directory is provided and we're not reading from file
+            if (!save_dir.empty()) {
+                save_transitions_to_file(save_dir);
+            }
+        }
+        
+        // Convert to Python dictionary
+        py::dict result;
+        
+        // Convert single token transitions
+        std::cout << "Converting single token transitions...\n";
+        for (const auto& [token, transitions] : single_token_transitions) {
+            py::dict token_transitions;
+            for (const auto& [next_token, count] : transitions) {
+                token_transitions[py::cast(next_token)] = count;
+            }
+            result[py::cast(token)] = token_transitions;
+        }
+        
+        // Convert pair transitions
+        std::cout << "Converting pair transitions...\n";
+        for (const auto& [token_pair, transitions] : pair_token_transitions) {
+            py::tuple key = py::make_tuple(token_pair.first, token_pair.second);
+            py::dict pair_transitions;
+            for (const auto& [next_token, count] : transitions) {
+                pair_transitions[py::cast(next_token)] = count;
+            }
+            result[key] = pair_transitions;
+        }
+        
+        std::cout << "Analysis complete.\n";
+        std::cout << "Found " << single_token_transitions.size() << " unique single tokens\n";
+        std::cout << "Found " << pair_token_transitions.size() << " unique token pairs\n";
+        
+        return result;
+    }
+
+
 private:
     void calcVocabSize() {
         vocab_size = 0;
@@ -493,7 +931,12 @@ PYBIND11_MODULE(fast_tokenized_dataset, m) {
              py::arg("output_dir"))
         .def("distribute_tuples", &TokenizedDataset::distribute_tuples)
         .def("getVocabSize", &TokenizedDataset::getVocabSize)
-        .def("getNumWindows", &TokenizedDataset::getNumWindows);
+        .def("getNumWindows", &TokenizedDataset::getNumWindows)
+        .def("analyze_token_transitions", &TokenizedDataset::analyze_token_transitions,
+             py::arg("save_dir") = "",
+             py::arg("read_from_file") = false)
+        .def("save_transitions_to_file", &TokenizedDataset::save_transitions_to_file)
+        .def("load_transitions_from_file", &TokenizedDataset::load_transitions_from_file);
 
     // Create_dataloader function binding remains the same
     m.def("create_dataloader", &create_dataloader,

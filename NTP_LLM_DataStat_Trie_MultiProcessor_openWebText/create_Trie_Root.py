@@ -355,7 +355,6 @@ if __name__ == "__main__":
     save_Trie_folder = "./Tries/"
     folder_name_Tries = filename + f"_NumBins{args.num_bins}/"
     folder_Tries_path = save_Trie_folder + folder_name_Tries
-    
 
     # Example usage
     vocab_size = args.vocab_size
@@ -372,14 +371,36 @@ if __name__ == "__main__":
         os.mkdir(local_bin_folder_path)
     print(f"Directory exists: {os.path.exists(local_bin_folder_path)}")
 
-    bin_folder_path = folder_Tries_path + f"group_root/"
-    # bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
+    print(" GOING TO USE THE DICTIONARY FROM THE DATALOADER ")
 
-    num_ctx = len(dataloader)
+    if not os.path.exists(local_bin_folder_path + "context_trees_memap_cpp/"):
+        os.mkdir(local_bin_folder_path + "context_trees_memap_cpp/")
+    if not os.path.exists(local_bin_folder_path + "graph_trees_cpp/"):
+        os.mkdir(local_bin_folder_path + "graph_trees_cpp/")
+    if not os.path.exists(local_bin_folder_path + "logs_trees_cpp/"):
+        os.mkdir(local_bin_folder_path + "logs_trees_cpp/")
+    
 
-    num_milestones = 100    
-    context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)
-    print("Tree loading/contruction complete")
+    save_tree_folder =  local_bin_folder_path + "context_trees_memap_cpp/"
+    save_graph_folder = local_bin_folder_path + "graph_trees_cpp/"
+    save_logs_folder =  local_bin_folder_path + "logs_trees_cpp/"
+
+    transitions = dataloader.dataset.analyze_token_transitions(save_tree_folder, False)
+
+
+    
+    
+
+    
+
+    # bin_folder_path = folder_Tries_path + f"group_root/"
+    # # bin_assigned_indices = np.load(bin_folder_path + 'indices.npy')
+
+    # num_ctx = len(dataloader)
+
+    # num_milestones = 100    
+    # context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)
+    # print("Tree loading/contruction complete")
 
 
 
