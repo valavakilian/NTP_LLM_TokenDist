@@ -72,7 +72,7 @@ from torch.optim import SGD
 # from OpenWebText_loader_memap_sharded import *
 # import Trie_module
 
-from Trie_dataloader import TokenizedDataset, create_dataloader
+from Trie_dataloader import TokenizedDataset, create_dataloader, Trie_module_protV1
 
 # -----------------------------------------------------------------------------
 # CLI for constructing the dataset
@@ -333,7 +333,7 @@ if __name__ == "__main__":
     parser.add_argument("--Trie_dir", type=str, default="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/", help="Save Trie File name")
     args = parser.parse_args()
 
-    bin_folder_path = args.Trie_dir + f"/shard{args.group}/"
+    bin_folder_path = args.Trie_dir + f"shard{args.group}/"
     
     local_bin_folder_path = "./Trie_info/"
     if not os.path.exists(local_bin_folder_path):
@@ -364,31 +364,60 @@ if __name__ == "__main__":
     args.vocab_size = vocab_size
 
     print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
+    
 
-    # Step 4: Load and Tokenize the Wikitext-2 Dataset
-    # Example usage with stride
-    num_ctx = len(dataloader)
-
-    # num_milestones = 100    
-    # context_tree = load_or_create_tree(args, local_bin_folder_path, dataloader, num_milestones, num_ctx)
-    # print("Tree loading/contruction complete")
-
+    print("_" * 100)
+    print("Creating Trie ... ")
     # Get the dataset object
     dataset = dataloader.dataset
 
     # Create and get the Trie with custom batch size
     context_tree = dataset.create_and_get_trie(
-        trie_path=local_bin_folder_path, 
+        trie_path=local_bin_folder_path + f"Trie{args.group}_MT", 
         initial_size_gb=160,
         batch_size=args.batch_size  # Specify your preferred batch size
     )
+    print("Complete!")
+    print("_" * 100)
 
+    print("_" * 100)
+    print("Saving Trie ... ")
     save_trie_time = time.time()
     context_tree.serialize_to_mmap()
     save_trie_time = save_trie_time - time.time()
     print(f"Took {save_trie_time} time to save trie." )
+    print("Complete!")
+    print("_" * 100)
+
+    # print("WE ARE HERE ???")
 
 
+    # print("Items currently are: ")
+    # # List all files and directories
+    # for item in os.listdir("./Trie_info"):
+    #     # Check if it's a file
+    #     print(os.path.join("./Trie_info", item))
+    #     if os.path.isfile(os.path.join("./Trie_info", item)):
+    #         print(item)
+    
+    
+    # # list_of_ctx_trie = []
+    # # list_of_ctx_trie.append(Trie_module_protV1(local_bin_folder_path + f"Trie{args.group}_MT")) 
+
+    # # print("We loaded the trie ???")
+    
+    # # thing = 0
+    # # for X in dataloader:
+    # #     if thing == 1:
+    # #         break 
+    # #     thing += 1
+        
+    # # print("for " + str(X.shape))
+    # # start_time = time.time()
+    # # soft_labels = list_of_ctx_trie[0].retrieve_softlabel(X)
+    # # total_time = time.time() - start_time
+    # # print("total_time: " + str(total_time) )
+    # # # input()
 
         
 

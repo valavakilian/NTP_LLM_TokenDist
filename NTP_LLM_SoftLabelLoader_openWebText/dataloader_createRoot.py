@@ -61,9 +61,14 @@ if __name__ == "__main__":
     print("Running experiments for Vocab Size " + str(args.vocab_size) + " with Context Lenght " + str(args.context_length))
     
 
+    local_bin_folder_path = "./Trie_info/"
+    if not os.path.exists(local_bin_folder_path):
+        os.mkdir(local_bin_folder_path)
+    print(f"Directory exists: {os.path.exists(local_bin_folder_path)}")
+    
     print("_" * 100)
     print("Creating the root transition ...")
-    save_tree_folder = args.Trie_dir + "/root/"
+    save_tree_folder = local_bin_folder_path + "root/"
     Root_softLabel_dict = dataloader.dataset.analyze_token_transitions(save_tree_folder, False)
     print("Complete!")
     print("_" * 100)
