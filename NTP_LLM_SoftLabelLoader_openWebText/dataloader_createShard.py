@@ -2,84 +2,16 @@
 Download, preprocess and serve the WikiText dataset as a DataLoader.
 """
 
-
 import argparse
-import glob
-import json
 import os
-import random
-from typing import List
-
 import numpy as np
-import requests
-import sentencepiece as spm
 import torch
-import torch.distributed as dist
-from tqdm import tqdm
-
-# from tokenizer import Tokenizer
-from random import shuffle
-from collections import Counter
-
-import matplotlib.pylab as plt
-import time as time 
-import psutil
-
-import pickle 
-import gc
-import tracemalloc
-import resource
-import sys
-from pympler import asizeof
-
-
-import mmap
-import hashlib
-
-# import trie_module_memap
-# import trie_module_protV1_lib
-
-import numpy as np
-from datasets import load_from_disk
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers
-from torch.utils.data import Dataset, DataLoader
-import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-import torch
-from torch.utils.data import DataLoader
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
-from datasets import load_dataset
-from torch.optim import AdamW
-from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
-import torch.nn as nn
+from torch.utils.data import DataLoader
+from Trie_dataloader import create_dataloader
+import time
 
-
-from collections import defaultdict
-import mmap
-import os
-import struct
-import json
-import math
-
-from torch.optim import SGD
-
-
-
-# from Wiki_loader import *
-
-# from OpenWebText_loader_memap_sharded import *
-# import Trie_module
-
-from Trie_dataloader import TokenizedDataset, create_dataloader, Trie_module_protV1
-
-# -----------------------------------------------------------------------------
-# CLI for constructing the dataset
-
-from timeit import default_timer as timer
-
-
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 print("Importing Done")
 
@@ -88,28 +20,6 @@ print("Importing Done")
 # CLI for constructing the dataset
 
 SIZE_NODE_BYTES = 56 
-
-
-
-def generate_equal_spaced_points(num_examples, num_points):
-    # Ensure at least two points to avoid errors
-    if num_points < 2:
-        raise ValueError("num_points must be at least 2")
-    
-    # Calculate the spacing
-    step = num_examples / (num_points - 1)
-    
-    # Generate the points
-    points = [int(round(step * i)) for i in range(num_points)]
-    
-    # Ensure num_examples is included and the list is unique
-    if points[-1] != num_examples:
-        points[-1] = num_examples
-    
-    # Remove duplicates and sort the list
-    points = sorted(set(points))
-    
-    return points
 
 
 def calculate_trie_size_gb(num_contexts: int, context_length: int, avg_children_per_node: int = 3) -> int:
@@ -166,126 +76,6 @@ def calculate_trie_size_gb(num_contexts: int, context_length: int, avg_children_
     return size_gb
 
 
-
-def load_or_create_tree(args, bin_folder_path, dataloader, num_milestones, num_examples):
-
-    milestones = generate_equal_spaced_points(num_examples, num_milestones)[1:] # exclude zero
-    print("milestones are : " + str(milestones))
-
-    if not os.path.exists(bin_folder_path + "context_trees_memap_cpp/"):
-        os.mkdir(bin_folder_path + "context_trees_memap_cpp/")
-    if not os.path.exists(bin_folder_path + "graph_trees_cpp/"):
-        os.mkdir(bin_folder_path + "graph_trees_cpp/")
-    if not os.path.exists(bin_folder_path + "logs_trees_cpp/"):
-        os.mkdir(bin_folder_path + "logs_trees_cpp/")
-
-    save_tree_folder =  bin_folder_path + "context_trees_memap_cpp/"
-    save_graph_folder = bin_folder_path + "graph_trees_cpp/"
-    save_logs_folder =  bin_folder_path + "logs_trees_cpp/"
-    save_logs_filename_MT = f"Trie{args.group}.pkl"
-    memap_filename_MT = f"{save_tree_folder}Trie{args.group}_MT"
-
-
-    # Trie_predicted_size = max(int(SIZE_NODE_BYTES * num_examples * (args.context_length + 1) * 5 // (1024**3)), 60)
-    # Predict trie size
-    num_examples = num_examples * args.batch_size
-    print("dataloader lenghts: " + str(num_examples))
-    Trie_predicted_size = calculate_trie_size_gb(num_examples, args.context_length)
-
-       
-    exp_was_initiated = False
-
-    print("Tree is new. Constructing ...")
-    up_to_ctx_count_processed = 0
-    # print(memap_filename_MT)
-    # print(memap_filename_ST)
-    # input()
-    print(memap_filename_MT)
-
-    if os.path.exists(memap_filename_MT + ".bin") and args.LoadTrieFromFile:
-        print("Trie fiel exists! Loading from file.")
-        context_tree_MT = Trie_module.Trie_module_protV1(memap_filename_MT)
-        return context_tree_MT
-    else:
-        print("File does not exist or forced to Trie recreation requested.")
-        print(f"Trie is of size {Trie_predicted_size} GB")
-        context_tree_MT = Trie_module.Trie_module_protV1(memap_filename_MT, 160, args.context_length)
-
-
-
-    data_log_MT = {
-        "entropy": {},
-        "total_count": {},
-        "entropy_per_ctx_len": {},
-        "num_total_ctx": {},
-        "num_unique_ctx": {},
-        "num_unique_ctx_len_list": {},
-        "num_total_ctx_len_list": {},
-        "insert_calc_time": {},
-        "entropy_calc_time": {},
-        "num_oneHots_list": {},
-        "supSize_list": {},
-        "uniformity_list": {}
-    }
-
-
-    insert_runtime_MT = 0
-    insert_runtime_ST = 0
-    
-    contexts_count = 0
-    milestone_index = 0
-    # Step 6: Iterate through the DataLoader and print samples
-    batches_seen = 0
-
-    for X in tqdm(dataloader):
-
-        # print("HEHEHEHEHEHEHEHEH")
-        contexts_count += X.shape[0]
-        batches_seen += 1
-
-        if contexts_count <= up_to_ctx_count_processed: 
-            del X
-            print("Context count " + str(contexts_count) + " is already processed.")
-        else:
-            
-            # start_time_insert = time.time()
-            # start_time_insert = timer()
-            result = context_tree_MT.insert(X, False)
-            # Get the results and timing
-            # soft_labels = result.result  # This is your original return value
-            execution_time_seconds = result.execution_time_ms / 1000.0
-            # insert_runtime += time.time() - start_time_insert
-            insert_runtime_MT += execution_time_seconds
-
-            del X
-            # print("Inserted a batch")
-
-            if batches_seen % 1000 == 0 and batches_seen > 10:
-                context_tree_MT.print_memory_stats()
-
-            if milestone_index < len(milestones) and batches_seen >= milestones[milestone_index]:
-                
-                num_ctx_seen = milestones[milestone_index]
-
-                data_log_MT["insert_calc_time"][contexts_count] = insert_runtime_MT                
-                print(f"Current MT Trie memory usage: {context_tree_MT.get_memory_usage()//(1024)**3} GB")
-                
-                print(f"Inserting MT trie took: {data_log_MT['insert_calc_time'][contexts_count]} seconds.")
-                print("_"*30)
-                
-                with open(save_logs_folder + save_logs_filename_MT, 'wb') as pickle_file:
-                    pickle.dump(data_log_MT, pickle_file)
-                
-
-                milestone_index += 1
-                insert_runtime_MT = 0
-        
-                context_tree_MT.save_metadata()
-    
-    
-    return context_tree_MT
-
-
 def get_soft_label(context_tree, args, X):
     output = context_tree.retrieve_softlabel(X)
 
@@ -303,13 +93,6 @@ def get_soft_label(context_tree, args, X):
     # print(y_soft_label.shape)
 
     return y_soft_label
-
-
-
-def get_warmup_lr(base_lr, current_step, warmup_steps):
-    """Calculate learning rate during warmup period."""
-    return base_lr * current_step / warmup_steps
-
 
 
 if __name__ == "__main__":

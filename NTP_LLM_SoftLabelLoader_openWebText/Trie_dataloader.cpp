@@ -96,9 +96,10 @@ struct MemoryStats {
 };
 
 struct InsertResult {
-    py::list result;
+    std::vector<std::vector<std::unordered_map<int64_t, double>>> distributions;
     double execution_time_ms;
 };
+
 
 class Trie_module_protV1 {
 
@@ -556,14 +557,18 @@ public:
         }
     }
     
-    std::vector<std::unordered_map<int64_t, double>> insert_context(const torch::Tensor& tensor, int64_t column, bool return_prob_distr) {   
+    
+    std::vector<std::unordered_map<int64_t, double>> insert_context(
+            const std::vector<std::vector<int64_t>>& sequences,
+            size_t sequence_idx,
+            bool return_prob_distr) {   
         std::vector<std::unordered_map<int64_t, double>> distributions;
-        auto accessor = tensor.accessor<int64_t, 2>();
         int64_t current_level = 0;
         size_t current_index = 0;  // Start at root
 
-        for (int64_t j = 0; j < accessor.size(1); j++) {
-            int64_t value = accessor[column][j];
+        const auto& sequence = sequences[sequence_idx];
+        for (size_t j = 0; j < sequence.size(); j++) {
+            int64_t value = sequence[j];
             
             RAMTrieNode* current = &nodes[current_index];
             
@@ -609,64 +614,30 @@ public:
         return distributions;
     }
 
-
-    InsertResult insert(torch::Tensor tensor, bool return_prob_distr) {
-        TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
-        TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
-
+    double insert(const std::vector<std::vector<int64_t>>& sequences) {
         // Start timing
         auto start = std::chrono::high_resolution_clock::now();
         
         // Get system capabilities and set thread count
         int num_procs = omp_get_num_procs();
-        // int num_threads = num_procs;  // Using at most 8 threads
-        int num_threads = 1;
+        int num_threads = 1;  // Can be adjusted based on needs
         omp_set_num_threads(num_threads);
 
-
         // Calculate batch size per thread
-        int batch_size = tensor.size(0);
+        int batch_size = sequences.size();
         int chunk_size = std::max(1, batch_size / num_threads);
-
-        std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(batch_size);
         
         // Dynamic scheduling with calculated chunk size
         #pragma omp parallel for schedule(dynamic, chunk_size)
-        for (int col = 0; col < batch_size; col++) {
-            int thread_id = omp_get_thread_num();
-            // if (col % chunk_size == 0) {
-            //     DEBUG_PRINT("Thread " << thread_id << " processing chunk starting at " << col);
-            // }
-            soft_label_distributions[col] = this->insert_context(tensor, col, return_prob_distr);
+        for (int seq_idx = 0; seq_idx < batch_size; seq_idx++) {
+            insert_context(sequences, seq_idx, false);  // false since we don't need distributions
         }
-
-        // Single-threaded conversion to Python list (as before)
-        py::list soft_label_list;
-        for (const auto& seq_distributions : soft_label_distributions) {
-            py::list seq_result;
-            for (const auto& dist : seq_distributions) {
-                py::dict py_dist;
-                for (const auto& [token, prob] : dist) {
-                    py_dist[py::int_(token)] = py::float_(prob);
-                }
-                seq_result.append(py_dist);
-            }
-            soft_label_list.append(seq_result);
-        }
-
-        // Check if we're close to memory limit after insertion
-        // if (is_close_to_memory_limit()) {
-        //     save_metadata();
-        // }
 
         // End timing and calculate duration
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-        return InsertResult{
-            soft_label_list,
-            static_cast<double>(duration.count())
-        };
+        return static_cast<double>(duration.count());
     }
 
 
@@ -991,6 +962,10 @@ private:
 
     // ... existing private members ...
     std::shared_ptr<Trie_module_protV1> trie;
+
+    std::vector<std::shared_ptr<Trie_module_protV1>> shard_tries;
+    std::unordered_map<std::pair<uint16_t, uint16_t>, size_t, PairHash> pair_to_bin_mapping;
+
 
 
 public:
@@ -1470,7 +1445,7 @@ public:
         
         // Load single token transitions
         {
-            std::ifstream single_file(input_dir + "/single_transitions.bin", std::ios::binary);
+            std::ifstream single_file(input_dir + "/root_single_transitions.bin", std::ios::binary);
             if (!single_file) throw std::runtime_error("Cannot open single transitions file for reading");
             
             // Read number of tokens
@@ -1498,7 +1473,7 @@ public:
         
         // Load pair transitions
         {
-            std::ifstream pair_file(input_dir + "/pair_transitions.bin", std::ios::binary);
+            std::ifstream pair_file(input_dir + "/root_pair_transitions.bin", std::ios::binary);
             if (!pair_file) throw std::runtime_error("Cannot open pair transitions file for reading");
             
             // Read number of pairs
@@ -1656,7 +1631,7 @@ public:
     }
     
 
-    py::object create_and_get_trie(const std::string& trie_path, size_t initial_size_gb = 1, size_t batch_size = 1024) {
+    std::shared_ptr<Trie_module_protV1> create_and_get_trie(const std::string& trie_path, size_t initial_size_gb = 1, size_t batch_size = 1024) {
         std::cout << "Creating Trie from dataset ..." << std::endl;
         std::cout << "Trie path is set to be " << trie_path << std::endl;
         
@@ -1670,27 +1645,58 @@ public:
             size_t current_batch_size = std::min(batch_size, getNumWindows() - i);
             
             // Gather windows for this batch
-            std::vector<torch::Tensor> batch_windows;
+            std::vector<std::vector<int64_t>> batch_sequences;
             for (size_t j = 0; j < current_batch_size; j++) {
-                batch_windows.push_back(__getitem__(i + j));
+                std::vector<int64_t> window(context_length + 1); // +1 for target
+                std::copy(data.begin() + (i + j) * stride, 
+                        data.begin() + (i + j) * stride + context_length + 1,
+                        window.begin());
+                batch_sequences.push_back(window);
             }
             
-            // Stack windows into a single tensor
-            torch::Tensor batch_tensor = torch::stack(batch_windows);
-            
             // Insert into Trie directly using C++ method
-            trie->insert(batch_tensor, false);
+            trie->insert(batch_sequences);
             
             progress.update(current_batch_size);
         }
         progress.finish();
         
-        // Serialize Trie to disk
-        // std::cout << "Serializing Trie to disk..." << std::endl;
-        // trie->serialize_to_mmap();
+        return trie;
+    }
+
+
+    // Add this method to load all shard tries
+    void load_shard_tries(const std::string& base_trie_path, size_t num_shards) {
+        std::cout << "Loading tries for " << num_shards << " shards..." << std::endl;
         
-        // Return the Trie object to Python
-        return py::cast(trie);
+        // Initialize tries vector
+        shard_tries.resize(num_shards);
+        
+        // Load all tries in parallel
+        #pragma omp parallel for schedule(dynamic)
+        for (size_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
+            std::string trie_path = base_trie_path + "/shard" + std::to_string(shard_idx) + "/Trie"  + std::to_string(shard_idx) + "_MT";
+            shard_tries[shard_idx] = std::make_shared<Trie_module_protV1>(trie_path);
+            std::cout << "Loaded trie for shard " << shard_idx << std::endl;
+        }
+
+        std::cout << "All shard tries loaded successfully" << std::endl;
+    }
+
+    // Method to load pair mappings and initialize everything
+    void initialize_shard_system(const std::string& base_trie_path, 
+                            const std::string& mapping_dir, 
+                            const std::string& transitions_dir,
+                            size_t num_shards) {
+        // Load pair to bin mapping
+        pair_to_bin_mapping = load_pair_to_bin_mapping(mapping_dir);
+        std::cout << "Loaded pair to bin mapping with " << pair_to_bin_mapping.size() << " entries" << std::endl;
+        
+        // Load transitions
+        load_transitions_from_file(transitions_dir);
+        
+        // Load all tries
+        load_shard_tries(base_trie_path, num_shards);
     }
 
 
@@ -1745,54 +1751,58 @@ PYBIND11_MODULE(Trie_dataloader, m) {
     py::class_<Trie_module_protV1>(m, "Trie_module_protV1")
         .def(py::init<const std::string&, size_t, int64_t>())
         .def(py::init<const std::string&>())
-        .def("insert", &Trie_module_protV1::insert)
+        .def("insert", &Trie_module_protV1::insert)  // Now just returns double
         .def("retrieve_softlabel", &Trie_module_protV1::retrieve_softlabel)
         .def("get_memory_usage", &Trie_module_protV1::get_memory_usage)
         .def("get_allocated_size", &Trie_module_protV1::get_allocated_size)
-        .def("get_num_unique_contexts", &Trie_module_protV1::get_num_unique_contexts)  // New method to access num_unique_contexts
-        .def("get_num_total_contexts", &Trie_module_protV1::get_num_total_contexts)  // New method to access num_unique_contexts
+        .def("get_num_unique_contexts", &Trie_module_protV1::get_num_unique_contexts)
+        .def("get_num_total_contexts", &Trie_module_protV1::get_num_total_contexts)
         .def("load_metadata", &Trie_module_protV1::load_metadata)
         .def("save_metadata", &Trie_module_protV1::save_metadata)
         .def("serialize_to_mmap", &Trie_module_protV1::serialize_to_mmap)
         .def("get_memory_stats", &Trie_module_protV1::get_memory_stats)
         .def("print_memory_stats", &Trie_module_protV1::print_memory_stats);
-        
 
     py::class_<InsertResult>(m, "InsertResult")
-        .def_readonly("result", &InsertResult::result)
+        .def_readonly("distributions", &InsertResult::distributions)
         .def_readonly("execution_time_ms", &InsertResult::execution_time_ms);
 
     py::class_<TokenizedDataset, std::shared_ptr<TokenizedDataset>>(m, "TokenizedDataset")
         .def(py::init<const std::string&, size_t, double, size_t,
-             const std::vector<std::pair<uint16_t, uint16_t>>&,
-             const std::vector<size_t>&, bool, size_t, size_t>(),  // Added size_t for num_bins
-             py::arg("data_path"),
-             py::arg("context_length"),
-             py::arg("data_percentage") = 100,
-             py::arg("stride") = 0,
-             py::arg("token_pairs") = std::vector<std::pair<uint16_t, uint16_t>>(),
-             py::arg("valid_indices") = std::vector<size_t>(),
-             py::arg("is_root") = false,
-             py::arg("root_ctx_len") = 2,
-             py::arg("num_bins") = 100)  // Added num_bins argument
+            const std::vector<std::pair<uint16_t, uint16_t>>&,
+            const std::vector<size_t>&, bool, size_t, size_t>(),  // Added size_t for num_bins
+            py::arg("data_path"),
+            py::arg("context_length"),
+            py::arg("data_percentage") = 100,
+            py::arg("stride") = 0,
+            py::arg("token_pairs") = std::vector<std::pair<uint16_t, uint16_t>>(),
+            py::arg("valid_indices") = std::vector<size_t>(),
+            py::arg("is_root") = false,
+            py::arg("root_ctx_len") = 2,
+            py::arg("num_bins") = 100)  // Added num_bins argument
         .def("__len__", &TokenizedDataset::__len__)
         .def("__getitem__", &TokenizedDataset::__getitem__)
         .def("analyze_window_startPairs", &TokenizedDataset::analyze_window_startPairs,
-             py::arg("prefix_length") = 2)
+            py::arg("prefix_length") = 2)
         .def("save_pair_locations", &TokenizedDataset::save_pair_locations,
-             py::arg("output_dir"))
+            py::arg("output_dir"))
         .def("distribute_tuples", &TokenizedDataset::distribute_tuples)
         .def("getVocabSize", &TokenizedDataset::getVocabSize)
         .def("getNumWindows", &TokenizedDataset::getNumWindows)
         .def("analyze_token_transitions", &TokenizedDataset::analyze_token_transitions,
-             py::arg("save_dir") = "",
-             py::arg("read_from_file") = false)
+            py::arg("save_dir") = "",
+            py::arg("read_from_file") = false)
         .def("save_transitions_to_file", &TokenizedDataset::save_transitions_to_file)
         .def("load_transitions_from_file", &TokenizedDataset::load_transitions_from_file)
         .def("create_and_get_trie", &TokenizedDataset::create_and_get_trie,
-             py::arg("trie_path"),
-             py::arg("initial_size_gb") = 1,
-             py::arg("batch_size") = 1024);
+            py::arg("trie_path"),
+            py::arg("initial_size_gb") = 1,
+            py::arg("batch_size") = 1024)
+        .def("initialize_shard_system", &TokenizedDataset::initialize_shard_system,
+            py::arg("base_trie_path"),
+            py::arg("mapping_dir"),
+            py::arg("transitions_dir"),
+            py::arg("num_shards"));
 
     // Create_dataloader function binding remains the same
     m.def("create_dataloader", &create_dataloader,
