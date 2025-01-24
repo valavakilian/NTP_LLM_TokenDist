@@ -28,6 +28,12 @@
 #include <algorithm>
 #include <unistd.h> // for sleep()
 
+#include <vector>
+#include <mutex>
+#include <future>
+#include <chrono>
+
+
 
 namespace py = pybind11;
 using namespace py::literals;
@@ -84,6 +90,16 @@ void printTrieNode(const MMAPTrieNode* node) {
 }
 
 
+void clear_page_cache() {
+    // Drop page cache, dentries and inodes
+    int result = system("sync; echo 3 > /proc/sys/vm/drop_caches");
+    if (result != 0) {
+        std::cout << "Failed to clear page cache" << std::endl;
+    }
+    // Sleep a bit to ensure cache is cleared
+    sleep(1);
+}
+
 
 struct MemoryStats {
     size_t total_bytes;           
@@ -100,6 +116,19 @@ struct InsertResult {
     double execution_time_ms;
 };
 
+
+
+
+struct LevelStats {
+    double total_entropy;
+    double total_uniformity;
+    int64_t total_visits;      // How many times nodes at this level are visited/counted
+    int64_t unique_nodes;      // Number of unique nodes at this level
+    double total_support_size; // Sum of number of children for all nodes at this level
+    double total_num_oneHots; // Sum of number of children for all nodes at this level
+
+    LevelStats() : total_entropy(0.0), total_uniformity(0.0), total_visits(0), unique_nodes(0), total_support_size(0.0), total_num_oneHots(0.0) {}
+};
 
 class Trie_module_protV1 {
 
@@ -179,12 +208,13 @@ private:
 
     // For memory-mapped mode - keep original array version
     int64_t find_child(std::pair<uint16_t, int64_t>* children, uint16_t num_children, uint16_t value) {
-        // std::cout << "find_child searching for value " << value 
-        //         << " among " << num_children << " children" << std::endl;
-        
         for (int64_t i = 0; i < num_children; i++) {
-            // std::cout << "Comparing with child " << i << ": " << children[i].first << std::endl;
+            if (i + 1 < num_children) {  // Prefetch next child
+                __builtin_prefetch(&children[i + 1], 0, 3);
+            }
             if (children[i].first == value) {
+                // Prefetch the child node we're about to access
+                __builtin_prefetch(mapped_memory + children[i].second, 0, 3);
                 return i;
             }
         }
@@ -257,18 +287,24 @@ private:
         if (offset >= file_size) {
             throw std::runtime_error("Attempted to access memory outside of mapped region");
         }
-        return reinterpret_cast<MMAPTrieNode*>(mapped_memory + offset);
+        char* node_ptr = mapped_memory + offset;
+        __builtin_prefetch(node_ptr, 0, 3);  // Read access, high temporal locality
+        return reinterpret_cast<MMAPTrieNode*>(node_ptr);
     }
 
     // Memory-mapped version of get_children
     std::pair<uint16_t, int64_t>* get_mmap_children(MMAPTrieNode* node) {
         if (node->children_offset >= file_size) {
-            std::cout << "ERROR in get_mmap_children: offset " << node->children_offset 
-                    << " exceeds file_size " << file_size << std::endl;
             throw std::runtime_error("Invalid children offset");
         }
-        return reinterpret_cast<std::pair<uint16_t, int64_t>*>(mapped_memory + node->children_offset);
+        char* children_ptr = mapped_memory + node->children_offset;
+        // Prefetch the entire children array since we'll likely scan it
+        for(int i = 0; i < node->num_children; i += 8) {  // Prefetch in chunks
+            __builtin_prefetch(children_ptr + i * sizeof(std::pair<uint16_t, int64_t>), 0, 3);
+        }
+        return reinterpret_cast<std::pair<uint16_t, int64_t>*>(children_ptr);
     }
+
 
 
 public:
@@ -641,11 +677,123 @@ public:
     }
 
 
-    std::vector<std::unordered_map<int64_t, double>> retrieve_context_softlabel(const torch::Tensor& tensor, int64_t column) {
+    // And modify retrieve_context_softlabel to take a vector instead of tensor/column
+    std::vector<std::unordered_map<int64_t, double>> retrieve_context_softlabel(
+        const std::vector<int64_t>& sequence) {
+        
         if (is_construction_mode) {
             throw std::runtime_error("Cannot retrieve in construction mode - need to serialize to mmap first");
         }
+
+        std::vector<std::unordered_map<int64_t, double>> distributions;
+        size_t current_offset = 0;  // Start at root
+        MMAPTrieNode* current = get_mmap_node(current_offset);
+
+        for (int64_t value : sequence) {
+            uint16_t token_value = static_cast<uint16_t>(value);
+
+            if (current->num_children > 0) {
+                std::pair<uint16_t, int64_t>* children = get_mmap_children(current);
+                int64_t child_index = find_child(children, current->num_children, token_value);
+
+                if (child_index != -1) {
+                    current = get_mmap_node(children[child_index].second);
+                    
+                    std::unordered_map<int64_t, double> distribution;
+                    if (current->num_children > 0) {
+                        std::pair<uint16_t, int64_t>* next_children = get_mmap_children(current);
+                        for (uint16_t k = 0; k < current->num_children; k++) {
+                            MMAPTrieNode* child = get_mmap_node(next_children[k].second);
+                            distribution[static_cast<int64_t>(next_children[k].first)] = static_cast<double>(child->count);
+                        }
+                    }
+                    distributions.push_back(distribution);
+                } else {
+                    return distributions;
+                }
+            } else {
+                return distributions;
+            }
+        }
         
+        return distributions;
+    }
+
+    std::vector<std::vector<std::unordered_map<int64_t, double>>> retrieve_softlabel(
+        const std::vector<std::vector<int64_t>>& sequences) {
+        
+        std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(sequences.size());
+
+
+        // Convert sequences to tensor format for comparison
+        // Find max sequence length
+        size_t max_len = 0;
+        for (const auto& seq : sequences) {
+            max_len = std::max(max_len, seq.size());
+        }
+        
+        // Create tensor and fill it
+        auto tensor = torch::zeros({sequences.size(), max_len}, torch::kInt64);
+        for (size_t i = 0; i < sequences.size(); i++) {
+            for (size_t j = 0; j < sequences[i].size(); j++) {
+                tensor[i][j] = sequences[i][j];
+            }
+        }
+        
+        // Process all sequences
+        for (size_t seq_idx = 0; seq_idx < sequences.size(); seq_idx++) {
+            
+            auto start = std::chrono::high_resolution_clock::now();
+            auto result_tensor = this->retrieve_context_softlabel_py(tensor, seq_idx);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration_tensor = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout << "Tensor Retrieve of  seq_idx " << seq_idx << " took " << duration_tensor.count() << " milliseconds" << std::endl;
+
+            start = std::chrono::high_resolution_clock::now();
+            result_tensor = this->retrieve_context_softlabel_py(tensor, seq_idx);
+            end = std::chrono::high_resolution_clock::now();
+            duration_tensor = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout << "Tensor Retrieve of  seq_idx " << seq_idx << " took " << duration_tensor.count() << " milliseconds" << std::endl;
+
+            start = std::chrono::high_resolution_clock::now();
+            soft_label_distributions[seq_idx] = this->retrieve_context_softlabel(sequences[seq_idx]);
+            end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout << "CPP Retrieve of  seq_idx " << seq_idx << " took " << duration.count() << " milliseconds" << std::endl;
+
+
+            // Print distributions
+            std::cout << "Vector version distributions:\n";
+            for (size_t i = 0; i < soft_label_distributions[seq_idx].size(); i++) {
+                std::cout << "Position " << i << ": {";
+                for (const auto& [token, prob] : soft_label_distributions[seq_idx][i]) {
+                    std::cout << token << ":" << prob << ", ";
+                }
+                std::cout << "}\n";
+            }
+            
+            std::cout << "Tensor version distributions:\n";
+            for (size_t i = 0; i < result_tensor.size(); i++) {
+                std::cout << "Position " << i << ": {";
+                for (const auto& [token, prob] : result_tensor[i]) {
+                    std::cout << token << ":" << prob << ", ";
+                }
+                std::cout << "}\n";
+            }
+            std::cout << "----------------------------------------\n";
+            
+        }
+
+        return soft_label_distributions;
+    }
+
+
+
+
+    std::vector<std::unordered_map<int64_t, double>> retrieve_context_softlabel_py(const torch::Tensor& tensor, int64_t column) {
+        if (is_construction_mode) {
+            throw std::runtime_error("Cannot retrieve in construction mode - need to serialize to mmap first");
+        }
 
         std::vector<std::unordered_map<int64_t, double>> distributions;
         size_t current_offset = 0;  // Start at root
@@ -716,9 +864,7 @@ public:
         return distributions;
     }
 
-    py::list retrieve_softlabel(const torch::Tensor& tensor) {
-
-        // std::cout << "\n=== retrieve_softlabel ===\n";
+    py::list retrieve_softlabel_py(const torch::Tensor& tensor) {
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
         TORCH_CHECK(tensor.dim() == 2, "Input tensor must be 2-dimensional");
         TORCH_CHECK(tensor.dtype() == torch::kInt64, "Input tensor must be of type int64");
@@ -727,14 +873,16 @@ public:
         
         // Process all columns sequentially in a single thread
         for (int col = 0; col < tensor.size(0); col++) {
-            // std::cout << "\n=== In for loop for one context ===\n";
-            soft_label_distributions[col] = this->retrieve_context_softlabel(tensor, col);
+            auto start = std::chrono::high_resolution_clock::now();
+            soft_label_distributions[col] = this->retrieve_context_softlabel_py(tensor, col);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout << "Retrieve of  col " << col << " took " << duration.count() << " milliseconds" << std::endl;
         }
 
         // Convert the results to Python list
         py::list soft_label_list;
         for (const auto& seq_distributions : soft_label_distributions) {
-            // std::cout << "\n=== In for loop for turning to python ===\n";
             py::list seq_result;
             for (const auto& dist : seq_distributions) {
                 py::dict py_dist;
@@ -748,6 +896,19 @@ public:
 
         return soft_label_list;
     }
+
+    // std::vector<std::vector<std::unordered_map<int64_t, double>>> retrieve_softlabel(
+    //     const std::vector<std::vector<int64_t>>& sequences) {
+        
+    //     std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(sequences.size());
+        
+    //     #pragma omp parallel for schedule(dynamic)
+    //     for (size_t seq_idx = 0; seq_idx < sequences.size(); seq_idx++) {
+    //         soft_label_distributions[seq_idx] = this->retrieve_context_softlabel(sequences[seq_idx]);
+    //     }
+
+    //     return soft_label_distributions;
+    // }
 
 
     size_t get_memory_usage() const {
@@ -874,6 +1035,137 @@ public:
         std::cout << "==============================\n";
     }
 
+
+
+
+    // Calculate entropy for a single node
+    double calculate_node_entropy(const RAMTrieNode* node) {
+        if (node->num_children == 0) {
+            return 0.0;
+        }
+
+        // Calculate total count for probability normalization
+        int64_t total_count = 0;
+        for (int64_t i = 0; i < node->num_children; i++) {
+            RAMTrieNode* child = get_node(node->children[i].second);
+            total_count += child->count;
+        }
+
+        // Calculate entropy
+        double entropy = 0.0;
+        for (int64_t i = 0; i < node->num_children; i++) {
+            RAMTrieNode* child = get_node(node->children[i].second);
+            double p = static_cast<double>(child->count) / total_count;
+            if (p > 0.0) {  // Avoid log(0)
+                entropy -= p * std::log(p);
+            }
+        }
+
+        if (node->count != total_count){
+            std::cout << "WE FUCKED UP WOWOWOWOWO \n";
+            std::cout << "count: " << node->count  << "\n";
+            std::cout << "total_count: " << total_count  << "\n";
+        }
+
+        return entropy * total_count;  // Scale by total count as requested
+    }
+
+    // Calculate entropy statistics per level
+    std::vector<LevelStats> calculate_level_stats() {
+        if (!is_construction_mode) {
+            throw std::runtime_error("This function is only available in RAM construction mode");
+        }
+
+        std::vector<LevelStats> level_stats(context_length + 1);  // +1 for root level
+        std::vector<std::unordered_set<size_t>> nodes_at_level(context_length + 1);  // Track unique nodes per level
+        
+        // Process each node
+        for (size_t i = 0; i < nodes.size(); i++) {
+            const RAMTrieNode* node = &nodes[i];
+            int level = node->node_level;
+            
+            if (level >= level_stats.size()) {
+                level_stats.resize(level + 1);
+                nodes_at_level.resize(level + 1);
+            }
+
+            if (level > 2 && level <= context_length){
+
+                // Add node index to set of nodes at this level
+                nodes_at_level[level].insert(i);
+                
+                double node_entropy = calculate_node_entropy(node);
+                level_stats[level].total_entropy += node_entropy;
+                level_stats[level].total_visits += node->count;
+                level_stats[level].total_support_size += node->num_children;
+                if (node->num_children > 1) {
+                    level_stats[level].total_uniformity += node_entropy / std::log(node->num_children);
+                } else if ( node->num_children == 1){
+                    level_stats[level].total_num_oneHots += 1;
+                }
+
+            }
+            
+            
+        }
+
+        // Count unique nodes at each level
+        for (size_t level = 0; level < nodes_at_level.size(); level++) {
+            level_stats[level].unique_nodes = nodes_at_level[level].size();
+        }
+
+        return level_stats;
+    }
+
+
+    // Python-friendly wrapper to return statistics
+    py::dict get_level_statistics() {
+        if (!is_construction_mode) {
+            throw std::runtime_error("This function is only available in RAM construction mode");
+        }
+        
+        std::vector<LevelStats> stats = calculate_level_stats();
+        
+        py::dict result;
+        py::list levels;
+        py::list total_entropies;
+        py::list avg_entropies;
+        py::list total_uniformity;
+        py::list avg_uniformity;
+        py::list avg_support_sizes;
+        py::list total_visit_counts;
+        py::list unique_node_counts;
+        py::list total_num_oneHots;
+        
+        for (size_t level = 0; level < stats.size(); level++) {
+            const auto& level_stat = stats[level];
+            if (level_stat.total_visits > 0) {  // Only include levels that have nodes
+                levels.append(level);
+                total_entropies.append(level_stat.total_entropy);
+                avg_entropies.append(level_stat.total_entropy / level_stat.total_visits);
+                total_uniformity.append(level_stat.total_uniformity);
+                avg_uniformity.append(level_stat.total_uniformity / level_stat.total_visits);
+                avg_support_sizes.append(level_stat.total_support_size / level_stat.total_visits);
+                total_visit_counts.append(level_stat.total_visits);
+                unique_node_counts.append(level_stat.unique_nodes);
+                total_num_oneHots.append(level_stat.total_num_oneHots);
+            }
+        }
+        
+        result["levels"] = levels;
+        result["total_entropies"] = total_entropies;
+        result["avg_entropies"] = avg_entropies;
+        result["total_uniformity"] = total_uniformity;
+        result["avg_uniformity"] = avg_uniformity;
+        result["avg_support_sizes"] = avg_support_sizes;
+        result["total_visits"] = total_visit_counts;
+        result["unique_nodes"] = unique_node_counts;
+        result["total_num_oneHots"] = total_num_oneHots;
+        
+        
+        return result;
+    }
+
 };
 
 
@@ -941,6 +1233,13 @@ struct PairHash {
     }
 };
 
+// This struct will hold both types of labels
+struct BatchData {
+    torch::Tensor sequences;        // The input sequences
+    torch::Tensor hard_targets;     // One-hot targets
+    torch::Tensor soft_targets;     // Soft targets from our various sources
+};
+
 class TokenizedDataset {
 private:
     std::vector<uint16_t> data;  // Store all tokens in memory
@@ -966,6 +1265,12 @@ private:
     std::vector<std::shared_ptr<Trie_module_protV1>> shard_tries;
     std::unordered_map<std::pair<uint16_t, uint16_t>, size_t, PairHash> pair_to_bin_mapping;
 
+    std::vector<std::thread> shard_threads;
+    std::vector<bool> thread_initialized;
+    std::vector<std::unique_ptr<std::mutex>> shard_mutexes;
+    bool threads_running;
+
+
 
 
 public:
@@ -977,7 +1282,8 @@ public:
                     const std::vector<size_t>& valid_indices = {},
                     bool is_root = false,
                     size_t root_ctx_len = 2,
-                    size_t num_bins = 100) 
+                    size_t num_bins = 100, 
+                    size_t num_tokens_to_proc = 0) 
         : context_length(context_length)
         , stride(stride ? stride : context_length)
         , is_root(is_root)
@@ -1001,7 +1307,13 @@ public:
 
         // Calculate number of tokens and resize data vector
         num_tokens = file_size / sizeof(uint16_t);
-        num_tokens = static_cast<size_t>(num_tokens * (data_percentage / 100.0));
+        if (num_tokens_to_proc == 0){
+            num_tokens = static_cast<size_t>(num_tokens * (data_percentage / 100.0));
+        } else {
+            num_tokens = static_cast<size_t>(num_tokens_to_proc);
+        }
+        // num_tokens = static_cast<size_t>(num_tokens * (data_percentage / 100.0));
+        
         data.resize(num_tokens);
 
         // Read all data at once
@@ -1629,6 +1941,108 @@ public:
         
         return result;
     }
+
+
+    // Calculate entropy for a single transition distribution
+    double calculate_transition_entropy(const std::unordered_map<uint16_t, size_t>& transitions, int64_t& total_count) {
+        if (transitions.empty()) {
+            return 0.0;
+        }
+
+        // Calculate total count for probability normalization
+        total_count = 0;
+        for (const auto& [token, count] : transitions) {
+            total_count += count;
+        }
+
+        // Calculate entropy
+        double entropy = 0.0;
+        for (const auto& [token, count] : transitions) {
+            double p = static_cast<double>(count) / total_count;
+            if (p > 0.0) {  // Avoid log(0)
+                entropy -= p * std::log(p);
+            }
+        }
+
+        return entropy * total_count;  // Scale by total count as requested
+    }
+
+
+    py::dict calculate_transition_statistics() {
+        std::vector<LevelStats> level_stats(2);  // For context lengths 1 and 2
+
+        // Process single token transitions (context length 1)
+        for (const auto& [token, transitions] : single_token_transitions) {
+            int64_t total_count;
+            double node_entropy = calculate_transition_entropy(transitions, total_count);
+            
+            level_stats[0].total_entropy += node_entropy;
+            level_stats[0].unique_nodes++;  // Each token is a unique node
+            level_stats[0].total_visits += total_count;  // Add visits for this node
+            level_stats[0].total_support_size += transitions.size();  // Number of possible next tokens
+            if (transitions.size() > 1){
+                level_stats[0].total_uniformity += node_entropy / std::log(transitions.size());
+            } else if (transitions.size() == 1) {
+                level_stats[0].total_num_oneHots += 1;
+            }
+        }
+
+        // Process token pair transitions (context length 2)
+        for (const auto& [token_pair, transitions] : pair_token_transitions) {
+            int64_t total_count;
+            double node_entropy = calculate_transition_entropy(transitions, total_count);
+            
+            level_stats[1].total_entropy += node_entropy;
+            level_stats[1].unique_nodes++;  // Each token pair is a unique node
+            level_stats[1].total_visits += total_count;  // Add visits for this node
+            level_stats[1].total_support_size += transitions.size();  // Number of possible next tokens
+            if (transitions.size() > 1){
+                level_stats[1].total_uniformity += node_entropy / std::log(transitions.size());
+            } else if (transitions.size() == 1) {
+                level_stats[1].total_num_oneHots += 1;
+            }
+            
+        }
+
+        // Create Python dictionary with results
+        py::dict result;
+        py::list levels;
+        py::list total_entropies;
+        py::list avg_entropies;
+        py::list total_uniformity;
+        py::list avg_uniformity;
+        py::list avg_support_sizes;
+        py::list total_visit_counts;
+        py::list unique_node_counts;
+        py::list total_num_oneHots;
+
+        for (size_t level = 0; level < level_stats.size(); level++) {
+            const auto& level_stat = level_stats[level];
+            if (level_stat.unique_nodes > 0) {
+                levels.append(level + 1);  // 1-based level numbering
+                total_entropies.append(level_stat.total_entropy);
+                avg_entropies.append(level_stat.total_entropy / level_stat.total_visits);
+                total_uniformity.append(level_stat.total_uniformity);
+                avg_uniformity.append(level_stat.total_uniformity / level_stat.total_visits);
+                avg_support_sizes.append(level_stat.total_support_size / level_stat.unique_nodes);
+                total_visit_counts.append(level_stat.total_visits);
+                unique_node_counts.append(level_stat.unique_nodes);
+                total_num_oneHots.append(level_stat.total_num_oneHots);
+            }
+        }
+
+        result["levels"] = levels;
+        result["total_entropies"] = total_entropies;
+        result["avg_entropies"] = avg_entropies;
+        result["total_uniformity"] = total_uniformity;
+        result["avg_uniformity"] = avg_uniformity;
+        result["avg_support_sizes"] = avg_support_sizes;
+        result["total_visits"] = total_visit_counts;
+        result["unique_nodes"] = unique_node_counts;
+        result["total_num_oneHots"] = total_num_oneHots;
+
+        return result;
+    }
     
 
     std::shared_ptr<Trie_module_protV1> create_and_get_trie(const std::string& trie_path, size_t initial_size_gb = 1, size_t batch_size = 1024) {
@@ -1675,7 +2089,7 @@ public:
         // Load all tries in parallel
         #pragma omp parallel for schedule(dynamic)
         for (size_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
-            std::string trie_path = base_trie_path + "/shard" + std::to_string(shard_idx) + "/Trie"  + std::to_string(shard_idx) + "_MT";
+            std::string trie_path = base_trie_path + "shard" + std::to_string(shard_idx) + "/Trie"  + std::to_string(shard_idx) + "_MT";
             shard_tries[shard_idx] = std::make_shared<Trie_module_protV1>(trie_path);
             std::cout << "Loaded trie for shard " << shard_idx << std::endl;
         }
@@ -1684,21 +2098,663 @@ public:
     }
 
     // Method to load pair mappings and initialize everything
+    // void initialize_shard_system(const std::string& base_trie_path, 
+    //                         const std::string& mapping_dir, 
+    //                         const std::string& transitions_dir,
+    //                         size_t num_shards) {
+    //     // Load pair to bin mapping
+    //     pair_to_bin_mapping = load_pair_to_bin_mapping(mapping_dir);
+    //     std::cout << "Loaded pair to bin mapping with " << pair_to_bin_mapping.size() << " entries" << std::endl;
+        
+    //     // Load transitions
+    //     load_transitions_from_file(transitions_dir);
+        
+    //     // Load all tries
+    //     load_shard_tries(base_trie_path, num_shards);
+    // }
+
     void initialize_shard_system(const std::string& base_trie_path, 
-                            const std::string& mapping_dir, 
-                            const std::string& transitions_dir,
-                            size_t num_shards) {
-        // Load pair to bin mapping
+                               const std::string& mapping_dir, 
+                               const std::string& transitions_dir,
+                               size_t num_shards) {
+        // Load existing stuff
         pair_to_bin_mapping = load_pair_to_bin_mapping(mapping_dir);
         std::cout << "Loaded pair to bin mapping with " << pair_to_bin_mapping.size() << " entries" << std::endl;
         
-        // Load transitions
         load_transitions_from_file(transitions_dir);
         
-        // Load all tries
-        load_shard_tries(base_trie_path, num_shards);
+        // Initialize thread management
+        shard_threads.resize(num_shards);
+        thread_initialized.resize(num_shards, false);
+        shard_mutexes.resize(num_shards);
+        for(size_t i = 0; i < num_shards; i++) {
+            shard_mutexes[i] = std::make_unique<std::mutex>();
+        }
+        threads_running = true;
+        
+        // Initialize tries in parallel with dedicated threads
+        for (size_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
+            shard_threads[shard_idx] = std::thread([this, shard_idx, base_trie_path]() {
+                std::string trie_path = base_trie_path + "/shard" + std::to_string(shard_idx) + "/Trie" + std::to_string(shard_idx) + "_MT";
+                shard_tries[shard_idx] = std::make_shared<Trie_module_protV1>(trie_path);
+                thread_initialized[shard_idx] = true;
+            });
+        }
+
+        // Wait for all threads to finish initialization
+        for (size_t i = 0; i < num_shards; i++) {
+            if (shard_threads[i].joinable()) {
+                shard_threads[i].join();
+            }
+        }
+        
+        std::cout << "All shard tries loaded successfully" << std::endl;
     }
 
+
+    torch::Tensor retrieve_from_shard(const std::vector<int64_t>& sequence) {
+        size_t ctx_len = sequence.size() - 1;  // -1 because last token is target
+        torch::Tensor soft_targets = torch::zeros({ctx_len, vocab_size});
+
+        // std::cout << "retrieve_from_shard \n";
+        
+        // First position: use single token transitions
+        {
+            auto first_token = static_cast<uint16_t>(sequence[0]);
+            auto single_it = single_token_transitions.find(first_token);
+            if (single_it != single_token_transitions.end()) {
+                // Calculate total counts for normalization
+                size_t total_count = 0;
+                for (const auto& [_, count] : single_it->second) {
+                    total_count += count;
+                }
+                // Fill in probabilities
+                for (const auto& [next_token, count] : single_it->second) {
+                    soft_targets[0][next_token] = static_cast<double>(count) / total_count;
+                }
+            }
+        }
+
+        // Second position: use pair transitions
+        if (ctx_len > 1) {
+            auto token_pair = std::make_pair(
+                static_cast<uint16_t>(sequence[0]),
+                static_cast<uint16_t>(sequence[1])
+            );
+            auto pair_it = pair_token_transitions.find(token_pair);
+            if (pair_it != pair_token_transitions.end()) {
+                // Calculate total counts for normalization
+                size_t total_count = 0;
+                for (const auto& [_, count] : pair_it->second) {
+                    total_count += count;
+                }
+                // Fill in probabilities
+                for (const auto& [next_token, count] : pair_it->second) {
+                    soft_targets[1][next_token] = static_cast<double>(count) / total_count;
+                }
+            }
+        }
+
+        // Remaining positions: use trie shards
+        if (ctx_len > 2) {
+            // Get first two tokens to determine shard
+            auto token_pair = std::make_pair(
+                static_cast<uint16_t>(sequence[0]),
+                static_cast<uint16_t>(sequence[1])
+            );
+            
+            auto bin_it = pair_to_bin_mapping.find(token_pair);
+            if (bin_it != pair_to_bin_mapping.end()) {
+                size_t shard_idx = bin_it->second;
+                if (shard_idx < shard_tries.size() && shard_tries[shard_idx]) {
+                    // Get distributions from trie directly using the sequence vector
+                    auto trie_distributions = shard_tries[shard_idx]->retrieve_softlabel({sequence});
+                    
+                    // Fill in the remaining positions
+                    for (size_t pos = 2; pos < ctx_len; pos++) {
+                        if (pos < trie_distributions[0].size()) {
+                            // Calculate total counts for normalization
+                            double total_count = 0;
+                            for (const auto& [_, count] : trie_distributions[0][pos]) {
+                                total_count += count;
+                            }
+                            // Fill in probabilities
+                            for (const auto& [token, count] : trie_distributions[0][pos]) {
+                                soft_targets[pos][token] = count / total_count;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return soft_targets;
+    }
+
+
+
+    torch::Tensor retrieve_from_shard_DEBUG(const std::vector<int64_t>& sequence) {
+        size_t ctx_len = sequence.size() - 1;  // -1 because last token is target
+        torch::Tensor soft_targets = torch::zeros({ctx_len, vocab_size});
+
+        // std::cout << "retrieve_from_shard \n";
+        
+
+        auto start = std::chrono::high_resolution_clock::now();
+        // First position: use single token transitions
+        {
+            auto first_token = static_cast<uint16_t>(sequence[0]);
+            auto single_it = single_token_transitions.find(first_token);
+            if (single_it != single_token_transitions.end()) {
+                // Calculate total counts for normalization
+                size_t total_count = 0;
+                for (const auto& [_, count] : single_it->second) {
+                    total_count += count;
+                }
+                // Fill in probabilities
+                for (const auto& [next_token, count] : single_it->second) {
+                    soft_targets[0][next_token] = static_cast<double>(count) / total_count;
+                }
+            }
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "single token transitions took " << duration.count() << " milliseconds" << std::endl;
+
+        start = std::chrono::high_resolution_clock::now();
+        // Second position: use pair transitions
+        if (ctx_len > 1) {
+            auto token_pair = std::make_pair(
+                static_cast<uint16_t>(sequence[0]),
+                static_cast<uint16_t>(sequence[1])
+            );
+            auto pair_it = pair_token_transitions.find(token_pair);
+            if (pair_it != pair_token_transitions.end()) {
+                // Calculate total counts for normalization
+                size_t total_count = 0;
+                for (const auto& [_, count] : pair_it->second) {
+                    total_count += count;
+                }
+                // Fill in probabilities
+                for (const auto& [next_token, count] : pair_it->second) {
+                    soft_targets[1][next_token] = static_cast<double>(count) / total_count;
+                }
+            }
+        }
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "pair token transitions took " << duration.count() << " milliseconds" << std::endl;
+
+
+        start = std::chrono::high_resolution_clock::now();
+        // Remaining positions: use trie shards
+        if (ctx_len > 2) {
+            // Get first two tokens to determine shard
+            auto token_pair = std::make_pair(
+                static_cast<uint16_t>(sequence[0]),
+                static_cast<uint16_t>(sequence[1])
+            );
+            
+            auto bin_it = pair_to_bin_mapping.find(token_pair);
+            if (bin_it != pair_to_bin_mapping.end()) {
+                size_t shard_idx = bin_it->second;
+                if (shard_idx < shard_tries.size() && shard_tries[shard_idx]) {
+                    // Get distributions from trie directly using the sequence vector
+                    auto trie_distributions = shard_tries[shard_idx]->retrieve_softlabel({sequence});
+                    
+                    // // Fill in the remaining positions
+                    // for (size_t pos = 2; pos < ctx_len; pos++) {
+                    //     if (pos < trie_distributions[0].size()) {
+                    //         // Calculate total counts for normalization
+                    //         double total_count = 0;
+                    //         for (const auto& [_, count] : trie_distributions[0][pos]) {
+                    //             total_count += count;
+                    //         }
+                    //         // Fill in probabilities
+                    //         for (const auto& [token, count] : trie_distributions[0][pos]) {
+                    //             soft_targets[pos][token] = count / total_count;
+                    //         }
+                    //     }
+                    // }
+                }
+            }
+        }
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "trie took " << duration.count() << " milliseconds" << std::endl;
+
+        return soft_targets;
+    }
+    // torch::Tensor retrieve_batch_from_shard_DEBUG(const std::vector<std::vector<int64_t>>& batch) {
+    //     std::cout << "retrieve_batch_from_shard_DEBUG \n";
+    //     size_t batch_size = batch.size();
+    //     size_t ctx_len = batch[0].size() - 1;  
+        
+    //     auto soft_targets = torch::zeros({batch_size, ctx_len, vocab_size});
+        
+    //     // First group sequences by their shard
+    //     std::unordered_map<size_t, std::vector<std::pair<size_t, std::vector<int64_t>>>> shard_groups;
+        
+    //     for (size_t i = 0; i < batch_size; i++) {
+    //         const auto& sequence = batch[i];
+    //         // Process first token and pair for all sequences
+    //         auto first_token = static_cast<uint16_t>(sequence[0]);
+            
+    //         // First position distributions (same as before)
+    //         auto single_it = single_token_transitions.find(first_token);
+    //         if (single_it != single_token_transitions.end()) {
+    //             size_t total_count = 0;
+    //             for (const auto& [_, count] : single_it->second) {
+    //                 total_count += count;
+    //             }
+    //             for (const auto& [next_token, count] : single_it->second) {
+    //                 soft_targets[i][0][next_token] = static_cast<double>(count) / total_count;
+    //             }
+    //         }
+            
+    //         // Second position and shard grouping
+    //         if (ctx_len > 1) {
+    //             auto token_pair = std::make_pair(
+    //                 static_cast<uint16_t>(sequence[0]),
+    //                 static_cast<uint16_t>(sequence[1])
+    //             );
+                
+    //             // Handle pair transitions
+    //             auto pair_it = pair_token_transitions.find(token_pair);
+    //             if (pair_it != pair_token_transitions.end()) {
+    //                 size_t total_count = 0;
+    //                 for (const auto& [_, count] : pair_it->second) {
+    //                     total_count += count;
+    //                 }
+    //                 for (const auto& [next_token, count] : pair_it->second) {
+    //                     soft_targets[i][1][next_token] = static_cast<double>(count) / total_count;
+    //                 }
+    //             }
+
+    //             // Group by shard for remaining positions
+    //             auto bin_it = pair_to_bin_mapping.find(token_pair);
+    //             if (bin_it != pair_to_bin_mapping.end()) {
+    //                 shard_groups[bin_it->second].push_back({i, sequence});
+    //             }
+    //         }
+    //     }
+        
+    //     // Now process each shard's group in batch
+    //     for (const auto& [shard_idx, sequences] : shard_groups) {
+    //         if (shard_idx < shard_tries.size() && shard_tries[shard_idx]) {
+    //             std::vector<std::vector<int64_t>> shard_batch;
+    //             std::vector<size_t> original_indices;
+                
+    //             for (const auto& [idx, seq] : sequences) {
+    //                 shard_batch.push_back(seq);
+    //                 original_indices.push_back(idx);
+    //             }
+                
+    //             // Get distributions for this shard's batch
+    //             auto trie_distributions = shard_tries[shard_idx]->retrieve_softlabel(shard_batch);
+                
+    //             // Map results back to original positions
+    //             for (size_t i = 0; i < original_indices.size(); i++) {
+    //                 size_t orig_idx = original_indices[i];
+    //                 for (size_t pos = 2; pos < ctx_len; pos++) {
+    //                     if (pos < trie_distributions[i].size()) {
+    //                         double total_count = 0;
+    //                         for (const auto& [_, count] : trie_distributions[i][pos]) {
+    //                             total_count += count;
+    //                         }
+    //                         for (const auto& [token, count] : trie_distributions[i][pos]) {
+    //                             soft_targets[orig_idx][pos][token] = count / total_count;
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+        
+    //     return soft_targets;
+    // }
+
+
+    torch::Tensor retrieve_batch_from_shard(const std::vector<std::vector<int64_t>>& batch) {
+        // std::cout << "retrieve_batch_from_shard \n";
+        size_t batch_size = batch.size();
+        size_t ctx_len = batch[0].size() - 1;  // -1 because last token is target
+        
+        auto soft_targets = torch::zeros({batch_size, ctx_len, vocab_size});
+        
+        #pragma omp parallel for schedule(dynamic)
+        for (size_t i = 0; i < batch_size; i++) {
+            auto sequence_targets = retrieve_from_shard(batch[i]);
+            soft_targets[i] = sequence_targets;
+        }
+        
+        return soft_targets;
+    }
+
+
+    torch::Tensor retrieve_batch_from_shard_DEBUG(const std::vector<std::vector<int64_t>>& batch) {
+        std::cout << "******************************************************************************\n";
+        std::cout << "retrieve_batch_from_shard_DEBUG \n";
+        size_t batch_size = batch.size();
+        size_t ctx_len = batch[0].size() - 1;  // -1 because last token is target
+        
+        auto soft_targets = torch::zeros({batch_size, ctx_len, vocab_size});
+        
+        // #pragma omp parallel for schedule(dynamic)
+        for (size_t i = 0; i < batch_size; i++) {
+            std::cout << "______________________________________________________________________\n";
+            std::cout << "We are at index " << i << " \n";
+            auto sequence_targets = retrieve_from_shard_DEBUG(batch[i]);
+            soft_targets[i] = sequence_targets;
+        }
+        
+        return soft_targets;
+    }
+
+    // torch::Tensor retrieve_batch_from_shard_DEBUG(const std::vector<std::vector<int64_t>>& batch) {
+    //     std::cout << "retrieve_batch_from_shard_DEBUG \n";
+    //     size_t batch_size = batch.size();
+    //     size_t ctx_len = batch[0].size() - 1;  // -1 because last token is target
+        
+    //     auto soft_targets = torch::zeros({batch_size, ctx_len, vocab_size});
+        
+    //     // Group sequences by shard
+    //     std::unordered_map<size_t, std::vector<std::pair<size_t, std::vector<int64_t>>>> shard_groups;
+        
+    //     auto start = std::chrono::high_resolution_clock::now();
+    //     // First position and grouping loop
+    //     for (size_t i = 0; i < batch_size; i++) {
+    //         const auto& sequence = batch[i];
+            
+    //         // First position using single token transitions
+    //         auto first_token = static_cast<uint16_t>(sequence[0]);
+    //         auto single_it = single_token_transitions.find(first_token);
+    //         if (single_it != single_token_transitions.end()) {
+    //             size_t total_count = 0;
+    //             for (const auto& [_, count] : single_it->second) {
+    //                 total_count += count;
+    //             }
+    //             for (const auto& [next_token, count] : single_it->second) {
+    //                 soft_targets[i][0][next_token] = static_cast<double>(count) / total_count;
+    //             }
+    //         }
+            
+    //         // Second position using pair transitions
+    //         if (ctx_len > 1) {
+    //             auto token_pair = std::make_pair(
+    //                 static_cast<uint16_t>(sequence[0]),
+    //                 static_cast<uint16_t>(sequence[1])
+    //             );
+                
+    //             auto pair_it = pair_token_transitions.find(token_pair);
+    //             if (pair_it != pair_token_transitions.end()) {
+    //                 size_t total_count = 0;
+    //                 for (const auto& [_, count] : pair_it->second) {
+    //                     total_count += count;
+    //                 }
+    //                 for (const auto& [next_token, count] : pair_it->second) {
+    //                     soft_targets[i][1][next_token] = static_cast<double>(count) / total_count;
+    //                 }
+    //             }
+                
+    //             // Group by shard
+    //             auto bin_it = pair_to_bin_mapping.find(token_pair);
+    //             if (bin_it != pair_to_bin_mapping.end()) {
+    //                 shard_groups[bin_it->second].push_back({i, sequence});
+    //             }
+    //         }
+    //     }
+    //     auto end = std::chrono::high_resolution_clock::now();
+    //     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    //     std::cout << "First and second position processing took " << duration.count() << " milliseconds" << std::endl;
+
+    //     start = std::chrono::high_resolution_clock::now();
+    //     // Process each shard's sequences in parallel
+    //     std::vector<std::future<void>> futures;
+
+    //     for (const auto& [shard_idx, sequences] : shard_groups) {
+    //         // Launch a thread for each shard's work
+    //         futures.push_back(std::async(std::launch::async, [&, shard_idx, sequences]() {
+    //             std::lock_guard<std::mutex> lock(*shard_mutexes[shard_idx]);
+                
+    //             std::vector<std::vector<int64_t>> shard_batch;
+    //             std::vector<size_t> original_indices;
+                
+    //             for (const auto& [idx, seq] : sequences) {
+    //                 shard_batch.push_back(seq);
+    //                 original_indices.push_back(idx);
+    //             }
+                
+    //             std::cout << "Processing shard " << shard_idx << " with " << shard_batch.size() << " sequences\n";
+    //             auto trie_distributions = shard_tries[shard_idx]->retrieve_softlabel(shard_batch);
+                
+    //             // Map results back
+    //             for (size_t i = 0; i < original_indices.size(); i++) {
+    //                 size_t orig_idx = original_indices[i];
+    //                 for (size_t pos = 2; pos < ctx_len; pos++) {
+    //                     if (pos < trie_distributions[i].size()) {
+    //                         double total_count = 0;
+    //                         for (const auto& [_, count] : trie_distributions[i][pos]) {
+    //                             total_count += count;
+    //                         }
+    //                         for (const auto& [token, count] : trie_distributions[i][pos]) {
+    //                             soft_targets[orig_idx][pos][token] = count / total_count;
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }));
+    //     }
+
+    //     // Wait for all threads to complete
+    //     for (auto& future : futures) {
+    //         future.wait();
+    //     }
+        
+    //     end = std::chrono::high_resolution_clock::now();
+    //     duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    //     std::cout << "Parallel shard processing took " << duration.count() << " milliseconds" << std::endl;
+
+    //     return soft_targets;
+    // }
+
+
+    // Add this method to TokenizedDataset
+    BatchData get_batch_with_labels(size_t start_idx, size_t batch_size) {
+        std::cout << "get_batch_with_labels \n";
+        size_t end_idx = std::min(start_idx + batch_size, getNumWindows());
+        size_t actual_batch_size = end_idx - start_idx;
+        
+        // First collect all sequences using the same logic as __getitem__
+        std::vector<std::vector<int64_t>> batch_sequences;
+        batch_sequences.reserve(actual_batch_size);
+        
+        for (size_t i = start_idx; i < end_idx; i++) {
+            // Use same logic as __getitem__
+            size_t window_start;
+            if (!valid_indices.empty()) {
+                window_start = valid_indices[i] * stride;
+            } else {
+                window_start = i * stride;
+            }
+
+            size_t window_size = is_root ? root_ctx_len + 1 : context_length + 1;
+            std::vector<int64_t> window(window_size);
+            
+            // Use same copy logic as __getitem__
+            std::copy(data.begin() + window_start, 
+                    data.begin() + window_start + window_size,
+                    window.begin());
+
+            // // Print first few sequences for debug
+            // if (i < start_idx + 3) {
+            //     std::cout << "Sequence " << i << ": ";
+            //     for (const auto& token : window) {
+            //         std::cout << token << " ";
+            //     }
+            //     std::cout << std::endl;
+            // }
+            
+            batch_sequences.push_back(window);
+        }
+
+        // // Debug print raw values
+        // std::cout << "Raw values from batch_sequences:\n";
+        // for (size_t i = 0; i < 3; i++) {  // First 3 sequences
+        //     std::cout << "Sequence " << i << ": ";
+        //     for (auto val : batch_sequences[i]) {
+        //         std::cout << val << " ";
+        //     }
+        //     std::cout << "\n";
+        // }
+        
+        // Create tensors for the model
+        // auto sequences = torch::from_blob(batch_sequences.data(), 
+        //                                 {actual_batch_size, context_length + 1}, 
+        //                                 torch::kInt64).clone();
+        // Or alternatively use stack:
+        std::vector<torch::Tensor> sequence_tensors;
+        for (const auto& seq : batch_sequences) {
+            sequence_tensors.push_back(torch::tensor(seq, torch::kInt64));
+        }
+        auto sequences = torch::stack(sequence_tensors);
+        
+        // Set print options for more readable output
+        // torch::set_printoptions(torch::PrintOptions().precision(10).sci_mode(false));
+        // std::cout << "Sequences tensor shape: " << sequences.sizes() << std::endl;
+        // std::cout << "First few sequences from tensor:\n" << sequences.slice(0, 0, 3) << std::endl;
+
+        
+        // Create hard targets (one-hot)
+        // std::cout << "TARGET \n";
+        auto targets = sequences.slice(1, 1, context_length + 1);
+        // std::cout << "Targets tensor shape: " << targets.sizes() << std::endl;
+        // std::cout << "First few targets:\n" << targets.slice(0, 0, 3) << std::endl;
+
+        // std::cout << "hard_targets \n";
+        auto hard_targets = torch::zeros({actual_batch_size, context_length, vocab_size});
+        
+        hard_targets.scatter_(2, targets.unsqueeze(-1), 1);
+        
+        // std::cout << "soft_targets \n";
+        // Get soft targets using our batch sequences
+        auto soft_targets = retrieve_batch_from_shard(batch_sequences);
+        
+        return BatchData{sequences.slice(1, 0, context_length), 
+                        hard_targets, 
+                        soft_targets};
+    }
+
+
+    // Add this method to TokenizedDataset
+    BatchData get_batch_with_labels_DEBUG(size_t start_idx, size_t batch_size) {
+        std::cout << "get_batch_with_labels \n";
+        size_t end_idx = std::min(start_idx + batch_size, getNumWindows());
+        size_t actual_batch_size = end_idx - start_idx;
+        
+
+        auto start = std::chrono::high_resolution_clock::now();
+
+        // First collect all sequences using the same logic as __getitem__
+        std::vector<std::vector<int64_t>> batch_sequences;
+        batch_sequences.reserve(actual_batch_size);
+        
+        for (size_t i = start_idx; i < end_idx; i++) {
+            // Use same logic as __getitem__
+            size_t window_start;
+            if (!valid_indices.empty()) {
+                window_start = valid_indices[i] * stride;
+            } else {
+                window_start = i * stride;
+            }
+
+            size_t window_size = is_root ? root_ctx_len + 1 : context_length + 1;
+            std::vector<int64_t> window(window_size);
+            
+            // Use same copy logic as __getitem__
+            std::copy(data.begin() + window_start, 
+                    data.begin() + window_start + window_size,
+                    window.begin());
+
+            // // Print first few sequences for debug
+            // if (i < start_idx + 3) {
+            //     std::cout << "Sequence " << i << ": ";
+            //     for (const auto& token : window) {
+            //         std::cout << token << " ";
+            //     }
+            //     std::cout << std::endl;
+            // }
+            
+            batch_sequences.push_back(window);
+        }
+
+        // Stop measuring time
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Creating the batch_sequences " << duration.count() << " milliseconds" << std::endl;
+
+        // // Debug print raw values
+        // std::cout << "Raw values from batch_sequences:\n";
+        // for (size_t i = 0; i < 3; i++) {  // First 3 sequences
+        //     std::cout << "Sequence " << i << ": ";
+        //     for (auto val : batch_sequences[i]) {
+        //         std::cout << val << " ";
+        //     }
+        //     std::cout << "\n";
+        // }
+        
+        // Create tensors for the model
+        // auto sequences = torch::from_blob(batch_sequences.data(), 
+        //                                 {actual_batch_size, context_length + 1}, 
+        //                                 torch::kInt64).clone();
+        // Or alternatively use stack:
+        start = std::chrono::high_resolution_clock::now();
+
+        std::vector<torch::Tensor> sequence_tensors;
+        for (const auto& seq : batch_sequences) {
+            sequence_tensors.push_back(torch::tensor(seq, torch::kInt64));
+        }
+        auto sequences = torch::stack(sequence_tensors);
+
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Creating the sequences " << duration.count() << " milliseconds" << std::endl;
+        
+        // Set print options for more readable output
+        // torch::set_printoptions(torch::PrintOptions().precision(10).sci_mode(false));
+        // std::cout << "Sequences tensor shape: " << sequences.sizes() << std::endl;
+        // std::cout << "First few sequences from tensor:\n" << sequences.slice(0, 0, 3) << std::endl;
+
+        
+        start = std::chrono::high_resolution_clock::now();
+        // Create hard targets (one-hot)
+        // std::cout << "TARGET \n";
+        auto targets = sequences.slice(1, 1, context_length + 1);
+        // std::cout << "Targets tensor shape: " << targets.sizes() << std::endl;
+        // std::cout << "First few targets:\n" << targets.slice(0, 0, 3) << std::endl;
+
+        // std::cout << "hard_targets \n";
+        auto hard_targets = torch::zeros({actual_batch_size, context_length, vocab_size});
+        
+        hard_targets.scatter_(2, targets.unsqueeze(-1), 1);
+
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Creating the hard_targets " << duration.count() << " milliseconds" << std::endl;
+        
+        // std::cout << "soft_targets \n";
+        // Get soft targets using our batch sequences
+        start = std::chrono::high_resolution_clock::now();
+        auto soft_targets = retrieve_batch_from_shard_DEBUG(batch_sequences);
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Creating the soft_targets " << duration.count() << " milliseconds" << std::endl;
+        
+        return BatchData{sequences.slice(1, 0, context_length), 
+                        hard_targets, 
+                        soft_targets};
+    }
+    
 
 private:
     void calcVocabSize() {
@@ -1726,11 +2782,12 @@ py::tuple create_dataloader(const std::string& data_path,
                           bool shuffle = true,
                           bool is_root = false,
                           size_t root_ctx_len = 2,
-                          size_t num_bins = 100) {
+                          size_t num_bins = 100,
+                          size_t num_tokens_to_proc = 0) {
     
     auto dataset = std::make_shared<TokenizedDataset>(
         data_path, context_length, data_percentage, stride,
-        token_pairs, valid_indices, is_root, root_ctx_len, num_bins
+        token_pairs, valid_indices, is_root, root_ctx_len, num_bins, num_tokens_to_proc
     );
     
     py::object DataLoader = py::module::import("torch.utils.data").attr("DataLoader");
@@ -1748,11 +2805,13 @@ py::tuple create_dataloader(const std::string& data_path,
 PYBIND11_MODULE(Trie_dataloader, m) {
     m.doc() = "Fast tokenized dataset implementation in C++";
 
+    
     py::class_<Trie_module_protV1>(m, "Trie_module_protV1")
         .def(py::init<const std::string&, size_t, int64_t>())
         .def(py::init<const std::string&>())
         .def("insert", &Trie_module_protV1::insert)  // Now just returns double
         .def("retrieve_softlabel", &Trie_module_protV1::retrieve_softlabel)
+        .def("retrieve_softlabel_py", &Trie_module_protV1::retrieve_softlabel_py)
         .def("get_memory_usage", &Trie_module_protV1::get_memory_usage)
         .def("get_allocated_size", &Trie_module_protV1::get_allocated_size)
         .def("get_num_unique_contexts", &Trie_module_protV1::get_num_unique_contexts)
@@ -1761,16 +2820,23 @@ PYBIND11_MODULE(Trie_dataloader, m) {
         .def("save_metadata", &Trie_module_protV1::save_metadata)
         .def("serialize_to_mmap", &Trie_module_protV1::serialize_to_mmap)
         .def("get_memory_stats", &Trie_module_protV1::get_memory_stats)
-        .def("print_memory_stats", &Trie_module_protV1::print_memory_stats);
+        .def("print_memory_stats", &Trie_module_protV1::print_memory_stats)
+        .def("get_level_statistics", &Trie_module_protV1::get_level_statistics,
+             "Get entropy and node statistics for each level of the trie");;
 
     py::class_<InsertResult>(m, "InsertResult")
         .def_readonly("distributions", &InsertResult::distributions)
         .def_readonly("execution_time_ms", &InsertResult::execution_time_ms);
 
+    py::class_<BatchData>(m, "BatchData")
+        .def_readonly("sequences", &BatchData::sequences)
+        .def_readonly("hard_targets", &BatchData::hard_targets)
+        .def_readonly("soft_targets", &BatchData::soft_targets);
+    
     py::class_<TokenizedDataset, std::shared_ptr<TokenizedDataset>>(m, "TokenizedDataset")
         .def(py::init<const std::string&, size_t, double, size_t,
             const std::vector<std::pair<uint16_t, uint16_t>>&,
-            const std::vector<size_t>&, bool, size_t, size_t>(),  // Added size_t for num_bins
+            const std::vector<size_t>&, bool, size_t, size_t, size_t>(),  // Added size_t for num_bins
             py::arg("data_path"),
             py::arg("context_length"),
             py::arg("data_percentage") = 100,
@@ -1779,7 +2845,8 @@ PYBIND11_MODULE(Trie_dataloader, m) {
             py::arg("valid_indices") = std::vector<size_t>(),
             py::arg("is_root") = false,
             py::arg("root_ctx_len") = 2,
-            py::arg("num_bins") = 100)  // Added num_bins argument
+            py::arg("num_bins") = 100,
+            py::arg("num_tokens_to_proc") = 0)  // Added num_bins argument
         .def("__len__", &TokenizedDataset::__len__)
         .def("__getitem__", &TokenizedDataset::__getitem__)
         .def("analyze_window_startPairs", &TokenizedDataset::analyze_window_startPairs,
@@ -1802,7 +2869,13 @@ PYBIND11_MODULE(Trie_dataloader, m) {
             py::arg("base_trie_path"),
             py::arg("mapping_dir"),
             py::arg("transitions_dir"),
-            py::arg("num_shards"));
+            py::arg("num_shards"))
+        .def("retrieve_from_shard", &TokenizedDataset::retrieve_from_shard)
+        .def("retrieve_batch_from_shard", &TokenizedDataset::retrieve_batch_from_shard)
+        .def("get_batch_with_labels", &TokenizedDataset::get_batch_with_labels)
+        .def("get_batch_with_labels_DEBUG", &TokenizedDataset::get_batch_with_labels_DEBUG)
+        .def("calculate_transition_statistics", &TokenizedDataset::calculate_transition_statistics,
+             "Calculate entropy and node statistics from transition matrices");
 
     // Create_dataloader function binding remains the same
     m.def("create_dataloader", &create_dataloader,
@@ -1816,5 +2889,6 @@ PYBIND11_MODULE(Trie_dataloader, m) {
           py::arg("shuffle") = true,
           py::arg("is_root") = false,
           py::arg("root_ctx_len") = 2,
-          py::arg("num_bins") = 100);
+          py::arg("num_bins") = 100,
+          py::arg("num_tokens_to_proc") = 0);
 }

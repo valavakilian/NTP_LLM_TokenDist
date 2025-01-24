@@ -8,8 +8,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from Trie_dataloader import create_dataloader
+from Trie_dataloader import create_dataloader, Trie_module_protV1
 import time
+import json
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -108,6 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
     parser.add_argument("--stride", type=int, default=1, help="Window stride size")
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
+    parser.add_argument("--num_tokens_to_proc", type=int, default=0, help="Number of tokens to process, if zero we go with the precentage")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")
     parser.add_argument("--LoadTrieFromFile", type=bool, default=False, help="Load from existing file")
@@ -140,7 +142,8 @@ if __name__ == "__main__":
         valid_indices = valid_indices,
         stride=args.stride,   
         is_root = False, 
-        root_ctx_len = 2
+        root_ctx_len = 2,
+        num_tokens_to_proc = args.num_tokens_to_proc
     )
     print("Complete!")
     print("_" * 100)
@@ -164,44 +167,19 @@ if __name__ == "__main__":
     print("_" * 100)
 
     print("_" * 100)
-    print("Saving Trie ... ")
-    save_trie_time = time.time()
-    context_tree.serialize_to_mmap()
-    save_trie_time = save_trie_time - time.time()
-    print(f"Took {save_trie_time} time to save trie." )
+    print("Get shard stats")
+    start_time = time.time()
+    stats = context_tree.get_level_statistics()
+    stat_time = time.time() - start_time
     print("Complete!")
+    print(f"Took: {stat_time} seconds")
     print("_" * 100)
 
-    # print("WE ARE HERE ???")
-
-
-    # print("Items currently are: ")
-    # # List all files and directories
-    # for item in os.listdir("./Trie_info"):
-    #     # Check if it's a file
-    #     print(os.path.join("./Trie_info", item))
-    #     if os.path.isfile(os.path.join("./Trie_info", item)):
-    #         print(item)
-    
-    
-    # # list_of_ctx_trie = []
-    # # list_of_ctx_trie.append(Trie_module_protV1(local_bin_folder_path + f"Trie{args.group}_MT")) 
-
-    # # print("We loaded the trie ???")
-    
-    # # thing = 0
-    # # for X in dataloader:
-    # #     if thing == 1:
-    # #         break 
-    # #     thing += 1
-        
-    # # print("for " + str(X.shape))
-    # # start_time = time.time()
-    # # soft_labels = list_of_ctx_trie[0].retrieve_softlabel(X)
-    # # total_time = time.time() - start_time
-    # # print("total_time: " + str(total_time) )
-    # # # input()
-
-        
+    with open(args.Trie_dir + f'stat_graphs/stats_shard{args.group}.json', 'w') as f:
+        json.dump(stats, f)
+    with open(args.Trie_dir + f'stat_graphs/stats_shard{args.group}.json', 'r') as f:
+        loaded_dict = json.load(f)
+    print("loaded_dict:")
+    print(loaded_dict)
 
     

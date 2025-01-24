@@ -8,6 +8,8 @@ import numpy as np
 import os
 from torch.utils.data import DataLoader
 from Trie_dataloader import create_dataloader
+import time
+import json
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -31,6 +33,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
     parser.add_argument("--stride", type=int, default=1, help="Window stride size")
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
+    parser.add_argument("--num_tokens_to_proc", type=int, default=0, help="Number of tokens to process, if zero we go with the precentage")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")
     parser.add_argument("--LoadTrieFromFile", type=bool, default=False, help="Load from existing file")
@@ -53,7 +56,8 @@ if __name__ == "__main__":
         stride=args.stride,   
         is_root = False, 
         root_ctx_len = 2,
-        num_bins = args.num_bins
+        num_bins = args.num_bins,
+        num_tokens_to_proc = args.num_tokens_to_proc
     )
     print("Complete!")
     print("_" * 100)
@@ -72,3 +76,20 @@ if __name__ == "__main__":
     Root_softLabel_dict = dataloader.dataset.analyze_token_transitions(save_tree_folder, False)
     print("Complete!")
     print("_" * 100)
+
+
+    print("_" * 100)
+    print("Get root stats")
+    start_time = time.time()
+    stats = dataloader.dataset.calculate_transition_statistics()
+    stat_time = time.time() - start_time
+    print("Complete!")
+    print(f"Took: {stat_time} seconds")
+    print("_" * 100)
+
+    with open(args.Trie_dir + 'stat_graphs/stats_root.json', 'w') as f:
+        json.dump(stats, f)
+    with open(args.Trie_dir + 'stat_graphs/stats_root.json', 'r') as f:
+        loaded_dict = json.load(f)
+    print("loaded_dict:")
+    print(loaded_dict)

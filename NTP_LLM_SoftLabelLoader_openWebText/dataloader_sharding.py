@@ -27,6 +27,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
     parser.add_argument("--stride", type=int, default=1, help="Window stride size")
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
+    parser.add_argument("--num_tokens_to_proc", type=int, default=0, help="Number of tokens to process, if zero we go with the precentage")
     parser.add_argument("--scheduler_type", type=str, default="cosine", help="lr-scheduling style")
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")
     parser.add_argument("--num_bins", type=int, default=4, help="Step size")
@@ -53,7 +54,8 @@ if __name__ == "__main__":
         stride=args.stride,   
         is_root = False, 
         root_ctx_len = 2,
-        num_bins = args.num_bins
+        num_bins = args.num_bins,
+        num_tokens_to_proc = args.num_tokens_to_proc
     )
     print("Complete!")
     print("_" * 100)
