@@ -352,21 +352,8 @@ if __name__ == "__main__":
 
     # List of vocabulary sizes to analyze
     # vocab_sizes = [128 256 512 1024 2048 4096 8192 16384]
-    vocab_sizes = [128, 256, 512, 1024, 2048]
+    vocab_sizes = [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
     stats_list = []
-
-
-    # dataloader, vocab_size = create_dataloader(
-    #     f'/scratch/st-cthrampo-1/vaalaa/TinyStories_tokenizer_bin/data/processed/train_256.bin',
-    #     context_length=args.context_length,
-    #     batch_size=1000,
-    #     data_percentage=args.perc_stories,
-    #     stride=args.stride,   
-    #     is_root = True, 
-    #     root_ctx_len = 2
-    # )
-    # print(len(dataloader.dataset))
-    # input()
     
     for vocab_size in vocab_sizes:
         print(f"Processing vocabulary size {vocab_size}...")
