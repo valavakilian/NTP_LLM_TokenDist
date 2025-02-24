@@ -408,14 +408,14 @@ if __name__ == "__main__":
     parser.add_argument("--perc_stories", type=int, default=100, help="percentage of stories")
     parser.add_argument("--root_ctx_len", type=int, default=2, help="Size of the root context length")
     parser.add_argument("--Trie_dir", type=str, default="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_TinyStories_TokenizerAnalysis/Tries/", help="Save Trie File name")
-    parser.add_argument("--tokenizer", type=str, choices=["bpe", "unigram", "wordpiece", "sentencepiece"], required=False, help="Type of tokenizer to use.")
+    parser.add_argument("--tokenizer", type=str, choices=["bpe", "unigram", "wordpiece", "sentencepiece", "word", "charbpe", "hierarchical_bpe"], required=False, help="Type of tokenizer to use.")
     args = parser.parse_args()
 
     # Fixed vocabulary size
-    vocab_size = 2048
+    vocab_size = 10000
     
     # List of tokenizers to analyze
-    tokenizers = ["bpe", "unigram", "wordpiece"]
+    tokenizers = ["bpe", "unigram", "word", "wordpiece"]
     stats_list = []
     
     # Determine number of bins
@@ -449,7 +449,8 @@ if __name__ == "__main__":
         stats_list.append(merged_stats)
 
     # Generate plots
-    output_dir = os.path.join(args.Trie_dir, 'TokenizerComparisonPlots')
+    output_dir = os.path.join(args.Trie_dir, f'TokenizerComparisonPlots_v{vocab_size}')
+    os.makedirs(output_dir, exist_ok=True) 
     
     plot_comparative_statistics(
         stats_list,

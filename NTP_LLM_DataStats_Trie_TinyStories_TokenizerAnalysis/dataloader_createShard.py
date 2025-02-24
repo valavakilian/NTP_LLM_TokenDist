@@ -116,7 +116,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_bins", type=int, default=4, help="Number of shard")
     parser.add_argument("--root_ctx_len", type=int, default=2, help="Size of the root context lenght, shards will each have context length of (context_length - root_ctx_len) for the Trie")
     parser.add_argument("--Trie_dir", type=str, default="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_Wiki/Tries/", help="Save Trie File name")
-    parser.add_argument("--tokenizer", type=str, choices=["bpe", "unigram", "wordpiece", "sentencepiece"], required=True, help="Type of tokenizer to use.")
+    parser.add_argument("--tokenizer", type=str, choices=["bpe", "unigram", "wordpiece", "sentencepiece", "word", "charbpe", "hierarchical_bpe"], required=True, help="Type of tokenizer to use.")
     args = parser.parse_args()
 
     bin_folder_path = args.Trie_dir + f"shard{args.group}/"

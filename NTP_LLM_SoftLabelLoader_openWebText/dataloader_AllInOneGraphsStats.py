@@ -392,7 +392,7 @@ if __name__ == "__main__":
 
     # Example usage:
     # Assuming you have multiple merged stats for different token counts:
-    token_counts = [100000, 200000, 500000, 1000000, 2000000, 10000000, 20000000, 50000000, 100000000, 200000000, 500000000, 1000000000]
+    token_counts = [100000, 200000, 500000, 1000000, 2000000, 10000000, 20000000, 50000000, 100000000, 200000000, 500000000, 1000000000, 2000000000, 5000000000]
     stats_list = []
     tries_folder_path = "/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_MultiProcessor_OpenWebText_New/Tries/"
     for tokens in token_counts:

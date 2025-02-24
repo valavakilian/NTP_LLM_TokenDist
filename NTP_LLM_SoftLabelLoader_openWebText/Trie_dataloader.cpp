@@ -32,6 +32,8 @@
 #include <mutex>
 #include <future>
 #include <chrono>
+#include <stdint.h>
+
 
 
 
@@ -57,12 +59,11 @@ std::vector<RAMTrieNode> nodes;  // Our main container during construction
 
 // Memory mapped structure for final format
 struct MMAPTrieNode {
-    int32_t count;
-    uint16_t num_children;
-    int64_t children_offset;
-    uint8_t node_level;
-    uint16_t value;  // Add this to store the value associated with this node
-};
+    uint64_t count: 29;          // Max ~500M (actual max: 500,909,207)
+    uint64_t children_offset: 35; // Max ~20B (actual max: 20,036,368,264)
+    uint16_t num_children: 11;   // Max 2048 children
+    uint16_t node_level: 5;      // Max 31 levels
+} __attribute__((packed));
 
 // For RAM-based nodes
 void printTrieNode(const RAMTrieNode* node) {
@@ -116,6 +117,15 @@ struct InsertResult {
     double execution_time_ms;
 };
 
+
+template <typename T>
+void printVector(const std::vector<T>& vec) {
+    std::cout << "[ ";
+    for (const auto& val : vec) {
+        std::cout << val << " ";
+    }
+    std::cout << "]\n";
+}
 
 
 
@@ -207,18 +217,21 @@ private:
     }
 
     // For memory-mapped mode - keep original array version
-    int64_t find_child(std::pair<uint16_t, int64_t>* children, uint16_t num_children, uint16_t value) {
+    int64_t find_child(uint64_t* children, uint16_t num_children, uint16_t value) {
         for (int64_t i = 0; i < num_children; i++) {
-            if (i + 1 < num_children) {  // Prefetch next child
+            // Prefetch the next child in the array to improve cache locality
+            if (i + 1 < num_children) {
                 __builtin_prefetch(&children[i + 1], 0, 3);
             }
-            if (children[i].first == value) {
-                // Prefetch the child node we're about to access
-                __builtin_prefetch(mapped_memory + children[i].second, 0, 3);
+
+            // Check if the current child's value matches the target value
+            if (unpack_child_value(children[i]) == value) {
+                // Prefetch the child node that we are about to access
+                __builtin_prefetch(mapped_memory + unpack_children_offset(children[i]), 0, 3);
                 return i;
             }
         }
-        return -1;
+        return -1;  // Return -1 if the child is not found
     }
 
     // Add this function to handle children array allocation/reallocation
@@ -287,25 +300,44 @@ private:
         if (offset >= file_size) {
             throw std::runtime_error("Attempted to access memory outside of mapped region");
         }
+        // Calculate the pointer to the node at the given offset
         char* node_ptr = mapped_memory + offset;
-        __builtin_prefetch(node_ptr, 0, 3);  // Read access, high temporal locality
+
+        // Prefetch the node to optimize for future access
+        __builtin_prefetch(node_ptr, 0, 3);
+
         return reinterpret_cast<MMAPTrieNode*>(node_ptr);
     }
 
     // Memory-mapped version of get_children
-    std::pair<uint16_t, int64_t>* get_mmap_children(MMAPTrieNode* node) {
+    uint64_t* get_mmap_children(MMAPTrieNode* node) {
         if (node->children_offset >= file_size) {
             throw std::runtime_error("Invalid children offset");
         }
+
+        // Calculate the pointer to the packed children array
         char* children_ptr = mapped_memory + node->children_offset;
-        // Prefetch the entire children array since we'll likely scan it
-        for(int i = 0; i < node->num_children; i += 8) {  // Prefetch in chunks
-            __builtin_prefetch(children_ptr + i * sizeof(std::pair<uint16_t, int64_t>), 0, 3);
+
+        // Prefetch the children array in chunks to optimize for sequential access
+        for (int i = 0; i < node->num_children; i += 8) {
+            __builtin_prefetch(children_ptr + i * sizeof(uint64_t), 0, 3);
         }
-        return reinterpret_cast<std::pair<uint16_t, int64_t>*>(children_ptr);
+
+        return reinterpret_cast<uint64_t*>(children_ptr);
     }
 
 
+    // These are the packing code
+    uint64_t pack_child(uint16_t child_value, uint64_t children_offset) {
+        return (static_cast<uint64_t>(child_value) & 0x7FF) |  // Mask to 11 bits
+            ((children_offset & 0x7FFFFFFFF) << 11);       // Mask to 35 bits and shift
+    }
+    uint16_t unpack_child_value(uint64_t packed) {
+        return static_cast<uint16_t>(packed & 0x7FF);  // Extract the first 11 bits
+    }
+    uint64_t unpack_children_offset(uint64_t packed) {
+        return (packed >> 11) & 0x7FFFFFFFF;  // Extract bits 11–45
+    }
 
 public:
     // Constructor for building new trie in RAM
@@ -385,123 +417,201 @@ public:
         }
     }
 
+    // void serialize_to_mmap() {
+    //     std::cout << "----serialize_to_mmap----" << std::endl;
+
+    //     if (!is_construction_mode) {
+    //         throw std::runtime_error("Already in mmap mode");
+    //     }
+
+    //     // Calculate node and children offsets
+    //     size_t total_nodes = nodes.size();
+    //     std::vector<size_t> node_addresses(total_nodes);
+    //     size_t current_offset = 0;
+
+    //     // Compute offsets for nodes
+    //     for (size_t i = 0; i < total_nodes; i++) {
+    //         node_addresses[i] = current_offset;
+    //         current_offset += sizeof(MMAPTrieNode);
+    //     }
+
+    //     // Compute offsets for children arrays
+    //     size_t children_start = current_offset;
+    //     std::vector<size_t> children_addresses(total_nodes);
+
+    //     for (size_t i = 0; i < total_nodes; i++) {
+    //         if (nodes[i].num_children > 0) {
+    //             children_addresses[i] = current_offset;
+    //             current_offset += nodes[i].num_children * sizeof(std::pair<uint16_t, int64_t>);
+    //         }
+    //     }
+
+    //     size_t total_size = current_offset;
+    //     std::cout << "Total memory size: " << total_size << " bytes" << std::endl;
+
+    //     // Open file for mmap
+    //     fd = open(filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    //     if (fd == -1) {
+    //         throw std::runtime_error("Failed to create file for memory mapping");
+    //     }
+
+    //     // Set file size
+    //     if (ftruncate(fd, total_size) == -1) {
+    //         close(fd);
+    //         throw std::runtime_error("Failed to set file size");
+    //     }
+
+    //     // Map memory
+    //     mapped_memory = static_cast<char*>(mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+    //     if (mapped_memory == MAP_FAILED) {
+    //         close(fd);
+    //         throw std::runtime_error("Failed to map file to memory");
+    //     }
+
+    //     // Serialize nodes
+    //     for (size_t i = 0; i < total_nodes; i++) {
+    //         MMAPTrieNode mmap_node = {
+    //             .count = nodes[i].count,
+    //             .children_offset = children_addresses[i],
+    //             .num_children = static_cast<uint16_t>(nodes[i].num_children),
+    //             .node_level = static_cast<uint16_t>(nodes[i].node_level)
+    //         };
+    //         memcpy(mapped_memory + node_addresses[i], &mmap_node, sizeof(MMAPTrieNode));
+    //     }
+
+    //     // Serialize children
+    //     for (size_t i = 0; i < total_nodes; i++) {
+    //         if (nodes[i].num_children > 0) {
+    //             std::vector<uint64_t> packed_children(nodes[i].num_children);
+    //             for (uint16_t j = 0; j < nodes[i].num_children; j++) {
+    //                 packed_children[j] = pack_child(
+    //                     static_cast<uint16_t>(nodes[i].children[j].first),
+    //                     static_cast<uint64_t>(node_addresses[nodes[i].children[j].second])
+    //                 );
+    //             }
+
+    //             // Write the packed children to the mapped memory
+    //             memcpy(mapped_memory + children_addresses[i],
+    //                 packed_children.data(),
+    //                 nodes[i].num_children * sizeof(uint64_t));
+    //         }
+    //     }
+
+    //     // Update sizes and clean up
+    //     file_size = total_size;
+    //     allocated_size = total_size;
+
+    //     save_metadata();
+
+    //     // Cleanup nodes in RAM
+    //     for (auto& node : nodes) {
+    //         delete[] node.children;
+    //     }
+    //     nodes.clear();
+    //     nodes.shrink_to_fit();
+    //     is_construction_mode = false;
+
+    //     std::cout << "----serialization_complete----" << std::endl;
+    // }
+
     void serialize_to_mmap() {
         std::cout << "----serialize_to_mmap----" << std::endl;
-        
+
         if (!is_construction_mode) {
             throw std::runtime_error("Already in mmap mode");
         }
 
-        // First calculate where each node will be stored
         size_t total_nodes = nodes.size();
-        std::vector<size_t> node_addresses(total_nodes);  // Where each node will be stored
-        
-
-        // SOME DEBUG PRINTING
-        std::cout << "=== Starting serialization ===" << std::endl;
-        std::cout << "Total nodes to write: " << nodes.size() << std::endl;
-
-        // // When writing nodes & children
-        // for (size_t i = 0; i < total_nodes; i++) {
-        //     auto& ram_node = nodes[i];
-        //     std::cout << "\nWriting node " << i << ":" << std::endl;
-        //     std::cout << "- children count: " << ram_node.num_children << std::endl;
-        //     if (ram_node.num_children > 0) {
-        //         std::cout << "- children values: ";
-        //         for (int j = 0; j < ram_node.num_children; j++) {
-        //             std::cout << "(" << ram_node.children[j].first 
-        //                     << "," << ram_node.children[j].second << ") ";
-        //         }
-        //         std::cout << std::endl;
-        //     }
-        // }
-
-        // First block: all nodes
+        std::vector<size_t> node_addresses(total_nodes);
         size_t current_offset = 0;
+
+        // Compute offsets for nodes
         for (size_t i = 0; i < total_nodes; i++) {
             node_addresses[i] = current_offset;
             current_offset += sizeof(MMAPTrieNode);
         }
 
-        // Second block: all children arrays
-        size_t children_start = current_offset;  // Start of children arrays section
+        // Compute offsets for children arrays
+        size_t children_start = current_offset;
         std::vector<size_t> children_addresses(total_nodes);
-        
+        size_t total_children_count = 0;
+
         for (size_t i = 0; i < total_nodes; i++) {
-            children_addresses[i] = current_offset;
             if (nodes[i].num_children > 0) {
-                current_offset += nodes[i].num_children * sizeof(std::pair<uint16_t, int64_t>);
+                children_addresses[i] = current_offset;
+                current_offset += nodes[i].num_children * sizeof(uint64_t);
+                total_children_count += nodes[i].num_children;
             }
         }
 
-        // std::cout << "Debug offsets:\n";
-        // for (size_t i = 0; i < std::min(total_nodes, size_t(5)); i++) {
-        //     std::cout << "Node " << i << ": address=" << node_addresses[i] 
-        //             << ", children_address=" << children_addresses[i] << std::endl;
-        // }
-
         size_t total_size = current_offset;
-        std::cout << "total_size: " << total_size << std::endl;
+        size_t nodes_size = total_nodes * sizeof(MMAPTrieNode);
+        size_t children_size = total_children_count * sizeof(uint64_t);
 
-        // Create and map file
+        // Print memory usage details
+        std::cout << "=== Memory Usage Details ===" << std::endl;
+        std::cout << "Total Nodes: " << total_nodes << std::endl;
+        std::cout << "Total Children: " << total_children_count << std::endl;
+        std::cout << "Nodes Size: " << nodes_size << " bytes (" 
+                << nodes_size / (1024.0 * 1024.0) << " MB)" << std::endl;
+        std::cout << "Children Size: " << children_size << " bytes ("
+                << children_size / (1024.0 * 1024.0) << " MB)" << std::endl;
+        std::cout << "Total Size: " << total_size << " bytes (" 
+                << total_size / (1024.0 * 1024.0) << " MB)" << std::endl;
+
+        // Open file for mmap
         fd = open(filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
         if (fd == -1) {
             throw std::runtime_error("Failed to create file for memory mapping");
         }
 
-        // Set the file size
+        // Set file size
         if (ftruncate(fd, total_size) == -1) {
             close(fd);
             throw std::runtime_error("Failed to set file size");
         }
 
-        // Map the file
-        mapped_memory = static_cast<char*>(mmap(NULL, total_size, PROT_READ | PROT_WRITE, 
-                                            MAP_SHARED, fd, 0));
+        // Map memory
+        mapped_memory = static_cast<char*>(mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
         if (mapped_memory == MAP_FAILED) {
             close(fd);
             throw std::runtime_error("Failed to map file to memory");
         }
 
-        // Write all nodes first
+        // Serialize nodes
         for (size_t i = 0; i < total_nodes; i++) {
-            MMAPTrieNode mmap_node{
-                nodes[i].count,
-                static_cast<uint16_t>(nodes[i].num_children),
-                children_addresses[i],  // Point to where children array will be
-                static_cast<uint8_t>(nodes[i].node_level)
+            MMAPTrieNode mmap_node = {
+                .count = nodes[i].count,
+                .children_offset = children_addresses[i],
+                .num_children = static_cast<uint16_t>(nodes[i].num_children),
+                .node_level = static_cast<uint16_t>(nodes[i].node_level)
             };
             memcpy(mapped_memory + node_addresses[i], &mmap_node, sizeof(MMAPTrieNode));
         }
 
+        // Serialize children
         for (size_t i = 0; i < total_nodes; i++) {
             if (nodes[i].num_children > 0) {
-                std::vector<std::pair<uint16_t, int64_t>> child_pairs(nodes[i].num_children);
+                std::vector<uint64_t> packed_children(nodes[i].num_children);
                 for (uint16_t j = 0; j < nodes[i].num_children; j++) {
-
-                    // Validate vocab ID before compression
-                    // if (nodes[i].children[j].first > UINT16_MAX) {
-                    //     throw std::runtime_error("Vocab ID exceeds uint16_t range during serialization");
-                    // }
-                    // Store both value and address
-                    child_pairs[j] = {
-                        static_cast<uint16_t>(nodes[i].children[j].first),  // Original value
-                        node_addresses[nodes[i].children[j].second]  // Address where child is stored
-                    };
+                    packed_children[j] = pack_child(
+                        static_cast<uint16_t>(nodes[i].children[j].first),
+                        static_cast<uint64_t>(node_addresses[nodes[i].children[j].second])
+                    );
                 }
-                // Write array of child pairs
-                memcpy(mapped_memory + children_addresses[i], 
-                    child_pairs.data(), 
-                    nodes[i].num_children * sizeof(std::pair<uint16_t, int64_t>));
+
+                memcpy(mapped_memory + children_addresses[i],
+                    packed_children.data(),
+                    nodes[i].num_children * sizeof(uint64_t));
             }
         }
 
         // Update sizes and clean up
         file_size = total_size;
         allocated_size = total_size;
+
         save_metadata();
 
-        // Clean up and switch mode
         for (auto& node : nodes) {
             delete[] node.children;
         }
@@ -511,6 +621,8 @@ public:
 
         std::cout << "----serialization_complete----" << std::endl;
     }
+
+
 
 
 
@@ -592,6 +704,21 @@ public:
             }
         }
     }
+
+
+    void print_sequence(const std::vector<std::vector<int64_t>>& sequences, size_t sequence_idx) {
+        std::cout << "Printing sequence " << sequence_idx << ":\n";
+        const auto& sequence = sequences[sequence_idx];
+        
+        std::cout << "[ ";
+        for (size_t i = 0; i < sequence.size(); ++i) {
+            std::cout << sequence[i];
+            if (i < sequence.size() - 1) {
+                std::cout << ", ";
+            }
+        }
+        std::cout << " ]" << std::endl;
+    }
     
     
     std::vector<std::unordered_map<int64_t, double>> insert_context(
@@ -602,7 +729,13 @@ public:
         int64_t current_level = 0;
         size_t current_index = 0;  // Start at root
 
+        // std::cout << "\n -> Inside insert_context \n"
+
         const auto& sequence = sequences[sequence_idx];
+
+        // std::cout << "starting to insert the context \n";
+        // print_sequence(sequences, sequence_idx);
+
         for (size_t j = 0; j < sequence.size(); j++) {
             int64_t value = sequence[j];
             
@@ -680,7 +813,11 @@ public:
     // And modify retrieve_context_softlabel to take a vector instead of tensor/column
     std::vector<std::unordered_map<int64_t, double>> retrieve_context_softlabel(
         const std::vector<int64_t>& sequence) {
-        
+
+        // std::cout << "-> \n Inside retrieve_context_softlabel \n";
+        // std::cout << " we are querying for context: \n ";
+        // printVector(sequence);
+
         if (is_construction_mode) {
             throw std::runtime_error("Cannot retrieve in construction mode - need to serialize to mmap first");
         }
@@ -693,34 +830,42 @@ public:
             uint16_t token_value = static_cast<uint16_t>(value);
 
             if (current->num_children > 0) {
-                std::pair<uint16_t, int64_t>* children = get_mmap_children(current);
+                uint64_t* children = get_mmap_children(current);
                 int64_t child_index = find_child(children, current->num_children, token_value);
 
                 if (child_index != -1) {
-                    current = get_mmap_node(children[child_index].second);
-                    
+                    // std::cout << "_________________________________________________\n";
+                    // std::cout << "Found child at context value " << value << "\n";
+                    current = get_mmap_node(unpack_children_offset(children[child_index]));
+
                     std::unordered_map<int64_t, double> distribution;
                     if (current->num_children > 0) {
-                        std::pair<uint16_t, int64_t>* next_children = get_mmap_children(current);
+                        uint64_t* next_children = get_mmap_children(current);
                         for (uint16_t k = 0; k < current->num_children; k++) {
-                            MMAPTrieNode* child = get_mmap_node(next_children[k].second);
-                            distribution[static_cast<int64_t>(next_children[k].first)] = static_cast<double>(child->count);
+                            MMAPTrieNode* child = get_mmap_node(unpack_children_offset(next_children[k]));
+                            distribution[static_cast<int64_t>(unpack_child_value(next_children[k]))] =
+                                static_cast<double>(child->count);
                         }
                     }
                     distributions.push_back(distribution);
                 } else {
-                    return distributions;
+                    return distributions;  // Token not found, return collected distributions
                 }
             } else {
-                return distributions;
+                return distributions;  // No children, return collected distributions
             }
         }
-        
+
         return distributions;
     }
 
+
+
+
     std::vector<std::vector<std::unordered_map<int64_t, double>>> retrieve_softlabel(
         const std::vector<std::vector<int64_t>>& sequences) {
+
+        // std::cout << "-> \n Inside retrieve_softlabel \n";
         
         std::vector<std::vector<std::unordered_map<int64_t, double>>> soft_label_distributions(sequences.size());
 
@@ -743,50 +888,49 @@ public:
         // Process all sequences
         for (size_t seq_idx = 0; seq_idx < sequences.size(); seq_idx++) {
             
+            // auto start = std::chrono::high_resolution_clock::now();
+            // auto result_tensor = this->retrieve_context_softlabel_py(tensor, seq_idx);
+            // auto end = std::chrono::high_resolution_clock::now();
+            // auto duration_tensor = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            // std::cout << "Tensor Retrieve of  seq_idx " << seq_idx << " took " << duration_tensor.count() << " milliseconds" << std::endl;
+
+            // start = std::chrono::high_resolution_clock::now();
+            // result_tensor = this->retrieve_context_softlabel_py(tensor, seq_idx);
+            // end = std::chrono::high_resolution_clock::now();
+            // duration_tensor = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            // std::cout << "Tensor Retrieve of  seq_idx " << seq_idx << " took " << duration_tensor.count() << " milliseconds" << std::endl;
+
             auto start = std::chrono::high_resolution_clock::now();
-            auto result_tensor = this->retrieve_context_softlabel_py(tensor, seq_idx);
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration_tensor = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout << "Tensor Retrieve of  seq_idx " << seq_idx << " took " << duration_tensor.count() << " milliseconds" << std::endl;
-
-            start = std::chrono::high_resolution_clock::now();
-            result_tensor = this->retrieve_context_softlabel_py(tensor, seq_idx);
-            end = std::chrono::high_resolution_clock::now();
-            duration_tensor = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout << "Tensor Retrieve of  seq_idx " << seq_idx << " took " << duration_tensor.count() << " milliseconds" << std::endl;
-
-            start = std::chrono::high_resolution_clock::now();
             soft_label_distributions[seq_idx] = this->retrieve_context_softlabel(sequences[seq_idx]);
-            end = std::chrono::high_resolution_clock::now();
+            auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout << "CPP Retrieve of  seq_idx " << seq_idx << " took " << duration.count() << " milliseconds" << std::endl;
+            // std::cout << "CPP Retrieve of  seq_idx " << seq_idx << " took " << duration.count() << " milliseconds" << std::endl;
 
 
             // Print distributions
-            std::cout << "Vector version distributions:\n";
-            for (size_t i = 0; i < soft_label_distributions[seq_idx].size(); i++) {
-                std::cout << "Position " << i << ": {";
-                for (const auto& [token, prob] : soft_label_distributions[seq_idx][i]) {
-                    std::cout << token << ":" << prob << ", ";
-                }
-                std::cout << "}\n";
-            }
+            // std::cout << "Vector version distributions:\n";
+            // for (size_t i = 0; i < soft_label_distributions[seq_idx].size(); i++) {
+            //     std::cout << "Position " << i << ": {";
+            //     for (const auto& [token, prob] : soft_label_distributions[seq_idx][i]) {
+            //         std::cout << token << ":" << prob << ", ";
+            //     }
+            //     std::cout << "}\n";
+            // }
             
-            std::cout << "Tensor version distributions:\n";
-            for (size_t i = 0; i < result_tensor.size(); i++) {
-                std::cout << "Position " << i << ": {";
-                for (const auto& [token, prob] : result_tensor[i]) {
-                    std::cout << token << ":" << prob << ", ";
-                }
-                std::cout << "}\n";
-            }
-            std::cout << "----------------------------------------\n";
+            // std::cout << "Tensor version distributions:\n";
+            // for (size_t i = 0; i < result_tensor.size(); i++) {
+            //     std::cout << "Position " << i << ": {";
+            //     for (const auto& [token, prob] : result_tensor[i]) {
+            //         std::cout << token << ":" << prob << ", ";
+            //     }
+            //     std::cout << "}\n";
+            // }
+            // std::cout << "----------------------------------------\n";
             
         }
 
         return soft_label_distributions;
     }
-
 
 
 
@@ -798,71 +942,45 @@ public:
         std::vector<std::unordered_map<int64_t, double>> distributions;
         size_t current_offset = 0;  // Start at root
         
-        // std::cout << "=== Starting retrieval ===" << std::endl;
-        // std::cout << "File size: " << file_size << std::endl;
-        
         MMAPTrieNode* current = get_mmap_node(current_offset);
-        // std::cout << "Root node at offset " << current_offset << ":" << std::endl;
-        // std::cout << "- count: " << current->count << std::endl;
-        // std::cout << "- num_children: " << current->num_children << std::endl;
-        // std::cout << "- children_offset: " << current->children_offset << std::endl;
-
         auto accessor = tensor.accessor<int64_t, 2>();
 
-        for (int64_t j = 0; j < accessor.size(1); j++) {
-            // int64_t value = accessor[column][j];
-            // std::cout << "\nLooking for value: " << value << std::endl;
-
-            int64_t tensor_value = accessor[column][j];
-            // Validate value range
-            // if (tensor_value > UINT16_MAX) {
-            //     throw std::runtime_error("Tensor value exceeds uint16_t range");
-            // }
+        // Iterate over rows of the specified column
+        for (int64_t j = 0; j < accessor.size(0); j++) {  // Row count
+            int64_t tensor_value = accessor[j][column];
+            if (tensor_value > UINT16_MAX) {
+                throw std::runtime_error("Tensor value exceeds uint16_t range");
+            }
             uint16_t value = static_cast<uint16_t>(tensor_value);
 
             if (current->num_children > 0) {
-                std::pair<uint16_t, int64_t>* children = get_mmap_children(current);
-                
-                // std::cout << "Current node has " << current->num_children << " children:" << std::endl;
-                // for (int64_t i = 0; i < current->num_children; i++) {
-                //     std::cout << "Child " << i << ": value=" << children[i].first 
-                //             << ", offset=" << children[i].second << std::endl;
-                // }
-                
+                uint64_t* children = get_mmap_children(current);  // Use packed children array
                 int64_t child_index = find_child(children, current->num_children, value);
-                // std::cout << "find_child returned index: " << child_index << std::endl;
 
                 if (child_index != -1) {
-                    // std::cout << "Moving to child node at offset: " << children[child_index].second << std::endl;
-                    current = get_mmap_node(children[child_index].second);
-                    
+                    current = get_mmap_node(unpack_children_offset(children[child_index]));
+
                     std::unordered_map<int64_t, double> distribution;
                     if (current->num_children > 0) {
-                        std::pair<uint16_t, int64_t>* next_children = get_mmap_children(current);
-                        // std::cout << "Building distribution from " << current->num_children << " children:" << std::endl;
+                        uint64_t* next_children = get_mmap_children(current);
                         for (uint16_t k = 0; k < current->num_children; k++) {
-                            MMAPTrieNode* child = get_mmap_node(next_children[k].second);
-                            distribution[static_cast<int64_t>(next_children[k].first)] = static_cast<double>(child->count);
-                            // std::cout << "Added to distribution: " << next_children[k].first 
-                            //         << " -> " << child->count << std::endl;
+                            MMAPTrieNode* child = get_mmap_node(unpack_children_offset(next_children[k]));
+                            distribution[static_cast<int64_t>(unpack_child_value(next_children[k]))] =
+                                static_cast<double>(child->count);
                         }
                     }
                     distributions.push_back(distribution);
-                    // std::cout << "Added distribution of size: " << distribution.size() << std::endl;
                 } else {
-                    // std::cout << "Value not found, returning early" << std::endl;
-                    return distributions;
+                    return distributions;  // Stop early if the value isn't found
                 }
             } else {
-                // std::cout << "Node has no children, returning early" << std::endl;
-                return distributions;
+                return distributions;  // Stop early if there are no children
             }
         }
-        
-        // std::cout << "=== Retrieval complete ===" << std::endl;
-        // std::cout << "Returning " << distributions.size() << " distributions" << std::endl;
+
         return distributions;
     }
+
 
     py::list retrieve_softlabel_py(const torch::Tensor& tensor) {
         // Ensure that the input tensor is 2D and of type int64 (torch::kInt64)
@@ -1313,6 +1431,9 @@ public:
             num_tokens = static_cast<size_t>(num_tokens_to_proc);
         }
         // num_tokens = static_cast<size_t>(num_tokens * (data_percentage / 100.0));
+
+        // Need to chop off the last token
+        // num_tokens = num_tokens - context_length;
         
         data.resize(num_tokens);
 
@@ -1351,7 +1472,7 @@ public:
         const int num_threads = omp_get_max_threads();
         std::cout << "Using " << num_threads << " threads\n";
 
-        size_t total_windows = (num_tokens - prefix_length - 1) / stride + 1;
+        size_t total_windows = (num_tokens - context_length - 1) / stride + 1;
         size_t windows_per_chunk = (total_windows + num_threads - 1) / num_threads;
         
         std::vector<std::unordered_map<std::pair<uint16_t, uint16_t>, size_t, PairHash>> thread_counts(num_threads);
@@ -1367,7 +1488,7 @@ public:
             #pragma omp for schedule(dynamic, 1024)  // Add chunk size for better load balancing
             for (size_t window = 0; window < total_windows; window++) {
                 size_t start_pos = window * stride;
-                if (start_pos + prefix_length <= num_tokens) {
+                if (start_pos + context_length <= num_tokens) {
                     auto token_pair = std::make_pair(data[start_pos], data[start_pos + 1]);
                     thread_counts[thread_id][token_pair]++;
                 }
@@ -1459,10 +1580,10 @@ public:
         dist_progress.finish();
         
         // Print final bin loads
-        std::cout << "\nFinal bin loads:\n";
-        for (size_t i = 0; i < num_bins; i++) {
-            std::cout << "Bin " << i << ": " << bin_sums[i] << "\n";
-        }
+        // std::cout << "\nFinal bin loads:\n";
+        // for (size_t i = 0; i < num_bins; i++) {
+        //     std::cout << "Bin " << i << ": " << bin_sums[i] << "\n";
+        // }
         
         // Convert to Python format
         py::list py_bins;
@@ -1587,7 +1708,7 @@ public:
         std::vector<std::vector<size_t>> buffer_sizes(num_threads, 
             std::vector<size_t>(bins.size(), 0));
 
-        size_t total_windows = (num_tokens - 1) / stride + 1;
+        size_t total_windows = (num_tokens - context_length) / stride + 1;
         ProgressBar progress(total_windows, "Processing locations");
         std::atomic<size_t> progress_counter{0};
 
@@ -1598,7 +1719,7 @@ public:
             char number_buffer[32];
             
             #pragma omp for schedule(dynamic, 1024)
-            for (size_t i = 0; i < num_tokens - 1; i += stride) {
+            for (size_t i = 0; i < num_tokens - context_length; i += stride) {
                 auto token_pair = std::make_pair(data[i], data[i + 1]);
                 auto bin_it = pair_to_bin.find(token_pair);
                 
@@ -1661,6 +1782,8 @@ public:
     torch::Tensor __getitem__(size_t idx) {
         size_t start_idx;
         if (!valid_indices.empty()) {
+            // std::cout << "Valid indices is not empty \n"; 
+            // std::cout << "valid_indices[idx]: " << valid_indices[idx] << "\n";
             start_idx = valid_indices[idx] * stride;
         } else {
             start_idx = idx * stride;
@@ -1817,7 +1940,7 @@ public:
         std::cout << "Loaded " << pair_token_transitions.size() << " pair transitions" << std::endl;
     }
 
-
+    
     py::dict analyze_token_transitions(const std::string& save_dir = "", bool read_from_file = false) {
         if (read_from_file) {
             if (save_dir.empty()) {
@@ -1837,15 +1960,18 @@ public:
             
             // Process in batches to manage memory
             const size_t batch_size = 10000000;  // Process 10M tokens at a time
-            const size_t total_tokens = num_tokens - 2;
-            const size_t num_batches = (total_tokens + batch_size - 1) / batch_size;
+            // const size_t total_tokens = num_tokens ;
+            // const size_t num_batches = (total_tokens + batch_size - 1) / batch_size;
+            // In analyze_token_transitions:
+            const size_t effective_tokens = num_tokens;  // Match the context window size
+            const size_t num_batches = (effective_tokens + batch_size - 1) / batch_size;
             
-            ProgressBar progress(total_tokens, "Analyzing transitions");
+            ProgressBar progress(effective_tokens, "Analyzing transitions");
             std::atomic<size_t> progress_counter{0};
             
             for (size_t batch = 0; batch < num_batches; batch++) {
                 const size_t start_idx = batch * batch_size;
-                const size_t end_idx = std::min(start_idx + batch_size, total_tokens);
+                const size_t end_idx = std::min(start_idx + batch_size, effective_tokens);
                 
                 // Thread-local maps for this batch
                 std::vector<std::unordered_map<uint16_t, std::unordered_map<uint16_t, size_t>>> thread_single_transitions(num_threads);
@@ -1857,10 +1983,16 @@ public:
                     size_t local_progress = 0;
                     
                     #pragma omp for schedule(dynamic, 1024)
-                    for (size_t i = start_idx; i < end_idx; i++) {
+                    for (size_t i = start_idx; i < end_idx; i++) {  // Changed condition to prevent overflow
+
+                        if (i + context_length >= effective_tokens) {
+                            continue;
+                        }
+
                         uint16_t current_token = data[i];
                         uint16_t next_token = data[i + 1];
                         uint16_t next_next_token = data[i + 2];
+
                         
                         // Update thread-local maps
                         thread_single_transitions[thread_id][current_token][next_token]++;
@@ -1914,26 +2046,26 @@ public:
         // Convert to Python dictionary
         py::dict result;
         
-        // Convert single token transitions
-        std::cout << "Converting single token transitions...\n";
-        for (const auto& [token, transitions] : single_token_transitions) {
-            py::dict token_transitions;
-            for (const auto& [next_token, count] : transitions) {
-                token_transitions[py::cast(next_token)] = count;
-            }
-            result[py::cast(token)] = token_transitions;
-        }
+        // // Convert single token transitions
+        // std::cout << "Converting single token transitions...\n";
+        // for (const auto& [token, transitions] : single_token_transitions) {
+        //     py::dict token_transitions;
+        //     for (const auto& [next_token, count] : transitions) {
+        //         token_transitions[py::cast(next_token)] = count;
+        //     }
+        //     result[py::cast(token)] = token_transitions;
+        // }
         
-        // Convert pair transitions
-        std::cout << "Converting pair transitions...\n";
-        for (const auto& [token_pair, transitions] : pair_token_transitions) {
-            py::tuple key = py::make_tuple(token_pair.first, token_pair.second);
-            py::dict pair_transitions;
-            for (const auto& [next_token, count] : transitions) {
-                pair_transitions[py::cast(next_token)] = count;
-            }
-            result[key] = pair_transitions;
-        }
+        // // Convert pair transitions
+        // std::cout << "Converting pair transitions...\n";
+        // for (const auto& [token_pair, transitions] : pair_token_transitions) {
+        //     py::tuple key = py::make_tuple(token_pair.first, token_pair.second);
+        //     py::dict pair_transitions;
+        //     for (const auto& [next_token, count] : transitions) {
+        //         pair_transitions[py::cast(next_token)] = count;
+        //     }
+        //     result[key] = pair_transitions;
+        // }
         
         std::cout << "Analysis complete.\n";
         std::cout << "Found " << single_token_transitions.size() << " unique single tokens\n";
@@ -2044,16 +2176,35 @@ public:
         return result;
     }
     
+    void print_batch_sequences(const std::vector<std::vector<int64_t>>& batch_sequences) {
+        std::cout << "Printing batch sequences:" << std::endl;
+        std::cout << "Total number of sequences in batch: " << batch_sequences.size() << std::endl;
+        
+        for (size_t i = 0; i < batch_sequences.size(); ++i) {
+            std::cout << "Sequence " << i << ": [ ";
+            const auto& sequence = batch_sequences[i];
+            
+            for (size_t j = 0; j < sequence.size(); ++j) {
+                std::cout << sequence[j];
+                if (j < sequence.size() - 1) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << " ]" << std::endl;
+        }
+        std::cout << "----------------------------------------" << std::endl;
+    }
 
     std::shared_ptr<Trie_module_protV1> create_and_get_trie(const std::string& trie_path, size_t initial_size_gb = 1, size_t batch_size = 1024) {
-        std::cout << "Creating Trie from dataset ..." << std::endl;
-        std::cout << "Trie path is set to be " << trie_path << std::endl;
+        // std::cout << "Creating Trie from dataset ..." << std::endl;
+        // std::cout << "Trie path is set to be " << trie_path << std::endl;
         
         // Create Trie instance directly
         trie = std::make_shared<Trie_module_protV1>(trie_path, initial_size_gb, context_length);
         
         // Process dataset in batches
         ProgressBar progress(getNumWindows(), "Building Trie");
+        // std::cout << "Number of windows are " << getNumWindows() << "\n";
         
         for (size_t i = 0; i < getNumWindows(); i += batch_size) {
             size_t current_batch_size = std::min(batch_size, getNumWindows() - i);
@@ -2062,11 +2213,26 @@ public:
             std::vector<std::vector<int64_t>> batch_sequences;
             for (size_t j = 0; j < current_batch_size; j++) {
                 std::vector<int64_t> window(context_length + 1); // +1 for target
-                std::copy(data.begin() + (i + j) * stride, 
-                        data.begin() + (i + j) * stride + context_length + 1,
+                
+                // Calculate the correct start position based on whether we have valid indices
+                size_t start_pos;
+                if (!valid_indices.empty()) {
+                    // Use valid_indices to get the correct position
+                    start_pos = valid_indices[i + j] * stride;
+                } else {
+                    // Use sequential indices
+                    start_pos = (i + j) * stride;
+                }
+                
+                // Copy data into window
+                std::copy(data.begin() + start_pos, 
+                        data.begin() + start_pos + context_length + 1,
                         window.begin());
                 batch_sequences.push_back(window);
             }
+
+            // Print the batch sequences
+            // print_batch_sequences(batch_sequences);
             
             // Insert into Trie directly using C++ method
             trie->insert(batch_sequences);
@@ -2087,9 +2253,10 @@ public:
         shard_tries.resize(num_shards);
         
         // Load all tries in parallel
-        #pragma omp parallel for schedule(dynamic)
+        // #pragma omp parallel for schedule(dynamic)
         for (size_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
             std::string trie_path = base_trie_path + "shard" + std::to_string(shard_idx) + "/Trie"  + std::to_string(shard_idx) + "_MT";
+            // std::cout<< "Loading Trie shard at path "
             shard_tries[shard_idx] = std::make_shared<Trie_module_protV1>(trie_path);
             std::cout << "Loaded trie for shard " << shard_idx << std::endl;
         }
@@ -2113,50 +2280,37 @@ public:
     //     load_shard_tries(base_trie_path, num_shards);
     // }
 
+    // Method to load pair mappings and initialize everything
     void initialize_shard_system(const std::string& base_trie_path, 
-                               const std::string& mapping_dir, 
-                               const std::string& transitions_dir,
-                               size_t num_shards) {
-        // Load existing stuff
+                            const std::string& mapping_dir, 
+                            const std::string& transitions_dir,
+                            size_t num_shards) {
+        // Load pair to bin mapping
         pair_to_bin_mapping = load_pair_to_bin_mapping(mapping_dir);
         std::cout << "Loaded pair to bin mapping with " << pair_to_bin_mapping.size() << " entries" << std::endl;
         
+        // Load transitions
         load_transitions_from_file(transitions_dir);
         
-        // Initialize thread management
-        shard_threads.resize(num_shards);
-        thread_initialized.resize(num_shards, false);
-        shard_mutexes.resize(num_shards);
-        for(size_t i = 0; i < num_shards; i++) {
-            shard_mutexes[i] = std::make_unique<std::mutex>();
-        }
-        threads_running = true;
-        
-        // Initialize tries in parallel with dedicated threads
-        for (size_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
-            shard_threads[shard_idx] = std::thread([this, shard_idx, base_trie_path]() {
-                std::string trie_path = base_trie_path + "/shard" + std::to_string(shard_idx) + "/Trie" + std::to_string(shard_idx) + "_MT";
-                shard_tries[shard_idx] = std::make_shared<Trie_module_protV1>(trie_path);
-                thread_initialized[shard_idx] = true;
-            });
-        }
+        // Load all tries
+        load_shard_tries(base_trie_path, num_shards);
+    }
 
-        // Wait for all threads to finish initialization
-        for (size_t i = 0; i < num_shards; i++) {
-            if (shard_threads[i].joinable()) {
-                shard_threads[i].join();
-            }
+    void printTensor(const torch::Tensor& tensor) {
+        auto flattened = tensor.flatten();  // Flatten to 1D for easier printing
+        std::cout << "[ ";
+        for (int i = 0; i < flattened.size(0); ++i) {
+            std::cout << flattened[i].item<float>() << " ";
         }
-        
-        std::cout << "All shard tries loaded successfully" << std::endl;
+        std::cout << "]" << std::endl;
     }
 
 
     torch::Tensor retrieve_from_shard(const std::vector<int64_t>& sequence) {
-        size_t ctx_len = sequence.size() - 1;  // -1 because last token is target
+        size_t ctx_len = sequence.size();  // -1 because last token is target
         torch::Tensor soft_targets = torch::zeros({ctx_len, vocab_size});
 
-        // std::cout << "retrieve_from_shard \n";
+        // std::cout << "-> \n In retrieve_from_shard \n";
         
         // First position: use single token transitions
         {
@@ -2174,6 +2328,10 @@ public:
                 }
             }
         }
+        // std::cout << "Retrieved the first position where the context is " << sequence[0] << " and the ntp is << \n ";
+        // printVector(soft_targets[0])
+        // std::cout << printTensor(soft_targets[0]) << "\n";
+        // printTensor(soft_targets[0]);
 
         // Second position: use pair transitions
         if (ctx_len > 1) {
@@ -2195,6 +2353,12 @@ public:
             }
         }
 
+        // std::cout << "Retrieved the first pair where the context is (" << sequence[0] << "," << sequence[1] << ") and the ntp is << \n ";
+        // printVector(soft_targets[1]);
+        // std::cout << printTensor(soft_targets[1]) << "\n";
+        // printTensor(soft_targets[1]);
+
+        // std::cout << "Now going for trie shards ... \n";
         // Remaining positions: use trie shards
         if (ctx_len > 2) {
             // Get first two tokens to determine shard
@@ -2206,9 +2370,11 @@ public:
             auto bin_it = pair_to_bin_mapping.find(token_pair);
             if (bin_it != pair_to_bin_mapping.end()) {
                 size_t shard_idx = bin_it->second;
+                // std::cout << "Based on the first two tokens, this sequences belongs to bin " << shard_idx << " \n";
                 if (shard_idx < shard_tries.size() && shard_tries[shard_idx]) {
                     // Get distributions from trie directly using the sequence vector
                     auto trie_distributions = shard_tries[shard_idx]->retrieve_softlabel({sequence});
+                    // std::cout << "ctx_len is " << ctx_len << "\n";
                     
                     // Fill in the remaining positions
                     for (size_t pos = 2; pos < ctx_len; pos++) {
@@ -2228,8 +2394,28 @@ public:
             }
         }
 
+        // std::cout << "Exiting retrieve_from_shard \n ";
+
         return soft_targets;
     }
+
+    void printNestedMap(const std::unordered_map<uint16_t, std::unordered_map<uint16_t, size_t>>& single_token_transitions) {
+        std::cout << "{\n";
+        for (const auto& outer_pair : single_token_transitions) {
+            uint16_t outer_key = outer_pair.first;
+            const auto& inner_map = outer_pair.second;
+
+            std::cout << "  " << outer_key << ": { ";
+            for (const auto& inner_pair : inner_map) {
+                uint16_t inner_key = inner_pair.first;
+                size_t value = inner_pair.second;
+                std::cout << inner_key << ": " << value << ", ";
+            }
+            std::cout << "},\n";
+        }
+        std::cout << "}\n";
+    }
+
 
 
 
@@ -2237,7 +2423,14 @@ public:
         size_t ctx_len = sequence.size() - 1;  // -1 because last token is target
         torch::Tensor soft_targets = torch::zeros({ctx_len, vocab_size});
 
-        // std::cout << "retrieve_from_shard \n";
+        // std::cout << "retrieve_from_shard_DEBUG \n";
+
+        // std::cout << "[";
+        // if (!sequence.empty()) {
+        //     std::copy(sequence.begin(), sequence.end() - 1, std::ostream_iterator<int64_t>(std::cout, ", "));
+        //     std::cout << sequence.back();
+        // }
+        // std::cout << "]\n";
         
 
         auto start = std::chrono::high_resolution_clock::now();
@@ -2245,6 +2438,10 @@ public:
         {
             auto first_token = static_cast<uint16_t>(sequence[0]);
             auto single_it = single_token_transitions.find(first_token);
+            // std::cout << "first_token: " << first_token << "\n";
+            // std::cout << "sequence[0]: " << sequence[0] << "\n";
+            // std::cout << "single_it: " << single_it << "\n";
+            // printNestedMap(single_token_transitions);
             if (single_it != single_token_transitions.end()) {
                 // Calculate total counts for normalization
                 size_t total_count = 0;
@@ -2259,7 +2456,7 @@ public:
         }
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        std::cout << "single token transitions took " << duration.count() << " milliseconds" << std::endl;
+        // std::cout << "single token transitions took " << duration.count() << " milliseconds" << std::endl;
 
         start = std::chrono::high_resolution_clock::now();
         // Second position: use pair transitions
@@ -2283,7 +2480,7 @@ public:
         }
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        std::cout << "pair token transitions took " << duration.count() << " milliseconds" << std::endl;
+        // std::cout << "pair token transitions took " << duration.count() << " milliseconds" << std::endl;
 
 
         start = std::chrono::high_resolution_clock::now();
@@ -2321,7 +2518,7 @@ public:
         }
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        std::cout << "trie took " << duration.count() << " milliseconds" << std::endl;
+        // std::cout << "trie took " << duration.count() << " milliseconds" << std::endl;
 
         return soft_targets;
     }
@@ -2416,14 +2613,16 @@ public:
 
 
     torch::Tensor retrieve_batch_from_shard(const std::vector<std::vector<int64_t>>& batch) {
-        // std::cout << "retrieve_batch_from_shard \n";
+        // std::cout << "-> \n We are in retrieve_batch_from_shard \n";
         size_t batch_size = batch.size();
-        size_t ctx_len = batch[0].size() - 1;  // -1 because last token is target
+        size_t ctx_len = batch[0].size();  // -1 because last token is target
         
         auto soft_targets = torch::zeros({batch_size, ctx_len, vocab_size});
         
-        #pragma omp parallel for schedule(dynamic)
+        // #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < batch_size; i++) {
+            // std::cout << "Looking at batch index i = " << i << " where the sequence is \n";
+            // printVector(batch[i]);
             auto sequence_targets = retrieve_from_shard(batch[i]);
             soft_targets[i] = sequence_targets;
         }
@@ -2433,17 +2632,20 @@ public:
 
 
     torch::Tensor retrieve_batch_from_shard_DEBUG(const std::vector<std::vector<int64_t>>& batch) {
-        std::cout << "******************************************************************************\n";
-        std::cout << "retrieve_batch_from_shard_DEBUG \n";
+        // std::cout << "******************************************************************************\n";
+        // std::cout << "retrieve_batch_from_shard_DEBUG \n";
         size_t batch_size = batch.size();
         size_t ctx_len = batch[0].size() - 1;  // -1 because last token is target
         
         auto soft_targets = torch::zeros({batch_size, ctx_len, vocab_size});
+
+        // std::cout << "batch_size" << batch_size << " \n";
+        // std::cout << "ctx_len" << ctx_len  << " \n";
         
         // #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < batch_size; i++) {
-            std::cout << "______________________________________________________________________\n";
-            std::cout << "We are at index " << i << " \n";
+            // std::cout << "______________________________________________________________________\n";
+            // std::cout << "We are at index " << i << " \n";
             auto sequence_targets = retrieve_from_shard_DEBUG(batch[i]);
             soft_targets[i] = sequence_targets;
         }
@@ -2561,7 +2763,7 @@ public:
 
     // Add this method to TokenizedDataset
     BatchData get_batch_with_labels(size_t start_idx, size_t batch_size) {
-        std::cout << "get_batch_with_labels \n";
+        // std::cout << "get_batch_with_labels \n";
         size_t end_idx = std::min(start_idx + batch_size, getNumWindows());
         size_t actual_batch_size = end_idx - start_idx;
         
@@ -2646,9 +2848,24 @@ public:
     }
 
 
+    void printBatch(const std::vector<std::vector<int64_t>>& batch_sequences) {
+        std::cout << "[\n";
+        for (const auto& sequence : batch_sequences) {
+            std::cout << "  [";
+            for (size_t i = 0; i < sequence.size(); ++i) {
+                std::cout << sequence[i];
+                if (i < sequence.size() - 1) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << "]\n";
+        }
+        std::cout << "]\n";
+    }
+
     // Add this method to TokenizedDataset
     BatchData get_batch_with_labels_DEBUG(size_t start_idx, size_t batch_size) {
-        std::cout << "get_batch_with_labels \n";
+        // std::cout << "get_batch_with_labels \n";
         size_t end_idx = std::min(start_idx + batch_size, getNumWindows());
         size_t actual_batch_size = end_idx - start_idx;
         
@@ -2687,6 +2904,8 @@ public:
             
             batch_sequences.push_back(window);
         }
+
+        // printBatch(batch_sequences);
 
         // Stop measuring time
         auto end = std::chrono::high_resolution_clock::now();
@@ -2753,6 +2972,30 @@ public:
         return BatchData{sequences.slice(1, 0, context_length), 
                         hard_targets, 
                         soft_targets};
+    }
+
+
+    // Add this function to the TokenizedDataset class
+    torch::Tensor get_batch_soft_tokens(const py::object& batch_sequences) {
+        // Convert Python sequence of sequences to vector of vectors
+        std::vector<std::vector<int64_t>> sequences;
+
+        // std::cout << "-> \n We are in get_batch_soft_tokens ... \n";
+        
+        // Handle list/tuple of arrays
+        for (py::handle sequence : batch_sequences) {
+            std::vector<int64_t> cpp_sequence;
+            // Convert numpy array or memmap to vector
+            for (py::handle token : sequence) {
+                cpp_sequence.push_back(token.cast<int64_t>());
+            }
+            sequences.push_back(cpp_sequence);
+        }
+        
+        // std::cout << " Sequence was created ... \n";
+
+        // Use existing function to get soft targets
+        return retrieve_batch_from_shard(sequences);
     }
     
 
@@ -2874,6 +3117,7 @@ PYBIND11_MODULE(Trie_dataloader, m) {
         .def("retrieve_batch_from_shard", &TokenizedDataset::retrieve_batch_from_shard)
         .def("get_batch_with_labels", &TokenizedDataset::get_batch_with_labels)
         .def("get_batch_with_labels_DEBUG", &TokenizedDataset::get_batch_with_labels_DEBUG)
+        .def("get_batch_soft_tokens", &TokenizedDataset::get_batch_soft_tokens, py::arg("batch_sequences"))
         .def("calculate_transition_statistics", &TokenizedDataset::calculate_transition_statistics,
              "Calculate entropy and node statistics from transition matrices");
 

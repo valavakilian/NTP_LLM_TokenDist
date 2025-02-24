@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_epochs", type=int, default=90, help="Step size")
     parser.add_argument("--num_bins", type=int, default=4, help="Step size")
     parser.add_argument("--Trie_dir", type=str, default="/scratch/st-cthrampo-1/vaalaa/NTP_LLM_DataStats_Trie_TinyStories/Tries/", help="Save Trie File name")
-    parser.add_argument("--tokenizer", type=str, choices=["bpe", "unigram", "wordpiece", "sentencepiece"], required=False, help="Type of tokenizer to use.")
+    parser.add_argument("--tokenizer", type=str, choices=["bpe", "unigram", "wordpiece", "sentencepiece", "word", "charbpe", "hierarchical_bpe"], required=False, help="Type of tokenizer to use.")
     args = parser.parse_args()
 
 
